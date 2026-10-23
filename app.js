@@ -666,17 +666,6 @@
     state.allQualifyingPairs = allQualifyingPairs;
     state.pairLookupMap = pairLookupMap;
 
-    // Auto-expand top 4 families if none are currently expanded
-    if (state.expandedFamilies.size === 0 && families.length > 0) {
-      for (let i = 0; i < Math.min(4, families.length); i++) {
-        const fam = families[i];
-        state.expandedFamilies.add(fam.degree.title);
-        if (fam.qualifyingCerts.length > 0 && !state.selectedCertByDegree.has(fam.degree.title)) {
-          state.selectedCertByDegree.set(fam.degree.title, fam.qualifyingCerts[0].cert.title);
-        }
-      }
-    }
-
     renderDisciplineFilterList();
     renderProgramTitleFilterList();
     updateKpisAndFilterBadges();
@@ -2181,6 +2170,7 @@
       dom.excludeGeToggle.checked = true;
 
       state.expandedFamilies.clear();
+      state.selectedCertByDegree.clear();
       runAnalysisPipeline();
     });
 

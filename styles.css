@@ -370,8 +370,16 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .plan-tabs-bar {
+  position: sticky;
+  top: 68px;
+  z-index: 85;
+  background-color: var(--bg-page);
+  padding-top: 0.5rem;
+  padding-bottom: 0.1rem;
   margin-bottom: 1.25rem;
   border-bottom: 1px solid var(--border-light);
+  box-shadow: 0 4px 6px -4px rgba(0, 0, 0, 0.06);
+  transition: background-color var(--transition-normal), border-color var(--transition-normal);
 }
 
 .plan-tabs-scroll {
@@ -626,8 +634,8 @@ h1, h2, h3, h4, h5, h6 {
   box-shadow: var(--shadow-sm);
   transition: background-color var(--transition-normal), border-color var(--transition-normal);
   position: sticky;
-  top: 82px;
-  max-height: calc(100vh - 100px);
+  top: 132px;
+  max-height: calc(100vh - 145px);
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-gutter: stable;
