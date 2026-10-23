@@ -1,0 +1,30 @@
+# AI Assistant Context & Prompt files
+GEMINI.md
+.gemini/
+.antigravity/
+
+# Reference assets (non-production)
+example 1_styles.css
+example 2_styles.css
+
+# Environment and local secret files
+.env
+.env.*
+*.local
+*.pem
+*.key
+
+# Operating System metadata
+Thumbs.db
+[Dd]esktop.ini
+.DS_Store
+
+# Logs & temporary files
+*.log
+*.tmp
+__pycache__/
+*.py[cod]
+
+# Editor & IDE configurations
+.vscode/
+.idea/
