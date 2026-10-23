@@ -616,17 +616,39 @@ h1, h2, h3, h4, h5, h6 {
 
 .dashboard-sidebar {
   width: 325px;
+  min-width: 325px;
+  max-width: 325px;
   flex-shrink: 0;
   background: var(--bg-surface);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-lg);
-  padding: 1.2rem;
+  padding: 1.2rem 0.95rem 1.2rem 1.2rem;
   box-shadow: var(--shadow-sm);
-  transition: all var(--transition-normal);
+  transition: background-color var(--transition-normal), border-color var(--transition-normal);
   position: sticky;
   top: 82px;
   max-height: calc(100vh - 100px);
   overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-medium) transparent;
+}
+
+.dashboard-sidebar::-webkit-scrollbar,
+.checkbox-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.dashboard-sidebar::-webkit-scrollbar-track,
+.checkbox-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.dashboard-sidebar::-webkit-scrollbar-thumb,
+.checkbox-list::-webkit-scrollbar-thumb {
+  background-color: var(--border-medium);
+  border-radius: var(--radius-pill);
 }
 
 .dashboard-sidebar.collapsed {
@@ -938,6 +960,10 @@ h1, h2, h3, h4, h5, h6 {
   gap: 0.25rem;
   max-height: 210px;
   overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-medium) transparent;
 }
 
 .checkbox-label {
