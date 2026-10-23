@@ -5,22 +5,20 @@
  * Client-Side Single-Page Application (SPA) for Higher Education Institutional
  * Research & Curriculum Pathway Analytics.
  *
- * Core Analytical Capabilities:
- * 1. Cartesian Product Deduplication:
- *    Deduplicates `Program Summary.csv` (flattened at Program x PLO x Course)
+ * Key Analytical Pipeline:
+ * 1. Active-Only Curriculum Scope:
+ *    Strictly filters `Program Summary.csv` to `Program Status === 'Active'`.
+ * 2. Cartesian Product Deduplication:
+ *    Deduplicates rows flattened at [Program Entity Title] x [PLO] x [Course]
  *    using the composite key: [Program Entity Title] + [Subject Code] + [Course Number].
- * 2. Credential Tier Classification:
- *    Categorizes programs into Associate Degrees vs. Certificates.
- * 3. Directional & Jaccard Overlap Engine:
- *    Computes Certificate Subsumption (|S_D ∩ S_C| / |S_C|), Overlapping Units %,
- *    Degree Completion Contribution (|S_D ∩ S_C| / |S_D|), and Jaccard Similarity.
- * 4. Interactive Visualizations:
- *    - Stackable Family Explorer (Expandable Cards + Inline Course Gap Checklist)
- *    - Interactive Network Cluster Graph (Vis.js node-link network + Inspector)
- *    - Overlap Crosswalk Heatmap Matrix (2D Degree x Certificate grid)
- * 5. Client-Side Exports:
- *    - Crosswalk CSV Generator
- *    - Executive Summary PDF Report via html2pdf.js
+ * 3. Primary Discipline Assignment:
+ *    Assigns each program to its true home department (matching discipline in
+ *    Program Title first, then majority course discipline) so support courses
+ *    (like 1 Accounting course inside Real Estate A.S.) never cause cross-department
+ *    false positives when filtering by Discipline.
+ * 4. Directional Stackable Overlap Engine:
+ *    Stackable Overlap % = (|S_D ∩ S_C| / |S_C|) * 100
+ *    Degree Completion Contribution % = (|S_D ∩ S_C| / |S_D|) * 100
  * ============================================================================
  */
 
@@ -31,43 +29,37 @@
    * 1. APPLICATION STATE
    * ------------------------------------------------------------------------ */
   const state = {
-    rawRows: [],                  // Raw parsed CSV rows from PapaParse
-    rawRowCount: 0,               // Total rows in CSV prior to deduplication
-    allDisciplines: [],           // Sorted list of all unique disciplines in dataset
-    statusCounts: {               // Distinct program counts per lifecycle status
-      Active: 0,
-      'In Review': 0,
-      Draft: 0,
-      Deactivated: 0
-    },
+    rawRowCount: 0,
+    activeRowCount: 0,
+    programsMap: new Map(),           // title -> Deduplicated Active Program Object
+    primaryDisciplines: [],           // [{ name, count, degreeCount, certCount }]
 
-    // User Filter & Model Controls
+    // User Filter & Control State
     filters: {
-      searchQuery: '',
-      threshold: 80,              // Default: 80% overlap threshold
-      metricMode: 'directional',  // 'directional' (Cert in Degree) | 'jaccard'
-      statuses: new Set(['Active']),
-      disciplines: new Set(),     // Populated with all disciplines on load
-      sortBy: 'certCount',        // 'certCount' | 'maxOverlap' | 'alpha' | 'units'
+      searchQuery: '',                // Matches course IDs, course titles, or keywords
+      threshold: 80,                  // Default: 80% directional stackable overlap
+      selectedDisciplines: new Set(), // Empty Set = All Disciplines shown
+      selectedProgramTitles: new Set(), // Empty Set = All Program Titles shown
+      programListTierFilter: 'all',   // 'all' | 'Degree' | 'Certificate' (for sidebar list)
+      sortBy: 'certCount',            // 'certCount' | 'maxOverlap' | 'alpha' | 'units'
       onlyWithCerts: true,
-      excludeGe: false,
-      matrixScope: 'matching',    // 'matching' | 'top35' | 'all'
+      excludeGe: true,                // Exclude Cal-GETC / GE Breadth by default
+      matrixScope: 'matching',        // 'matching' | 'top35' | 'all'
       networkHideIsolated: true
     },
 
-    // Processed & Filtered Analytical Entities
-    programsMap: new Map(),       // title -> Program Object (built for active status filter)
-    filteredDegrees: [],          // Array of Degree Program objects matching filters
-    filteredCerts: [],            // Array of Certificate Program objects matching filters
-    programFamilies: [],          // Array of { degree, qualifyingCerts, maxOverlap }
-    allQualifyingPairs: [],       // Flat array of all (Degree, Cert) pairs >= threshold
-    pairLookupMap: new Map(),     // "degreeTitle|||certTitle" -> OverlapPairResult
+    // Filtered Analytical Outputs
+    filteredDegrees: [],
+    filteredCerts: [],
+    programFamilies: [],
+    allQualifyingPairs: [],
+    pairLookupMap: new Map(),         // "degreeTitle|||certTitle" -> OverlapPairResult
 
     // UI Interaction State
-    activeView: 'families',       // 'families' | 'network' | 'matrix'
-    expandedFamilies: new Set(),  // Set of degree titles whose cards are expanded
-    selectedCertByDegree: new Map(), // degreeTitle -> certTitle for inline gap checklist
-    networkInstance: null,        // Vis.js Network instance
+    activeView: 'families',           // 'families' | 'network' | 'matrix'
+    expandedFamilies: new Set(),
+    selectedCertByDegree: new Map(),
+    networkInstance: null,
     networkPhysicsEnabled: true
   };
 
@@ -85,7 +77,10 @@
     dom.exportPdfBtn = document.getElementById('exportPdfBtn');
     dom.themeToggleBtn = document.getElementById('themeToggleBtn');
 
-    // KPI Ribbon
+    // Horizon & KPI Summary Cards
+    dom.activeFilterSummaryTag = document.getElementById('activeFilterSummaryTag');
+    dom.kpiRadialPath = document.getElementById('kpiRadialPath');
+    dom.kpiRadialPct = document.getElementById('kpiRadialPct');
     dom.kpiTotalPrograms = document.getElementById('kpiTotalPrograms');
     dom.kpiProgramSplit = document.getElementById('kpiProgramSplit');
     dom.kpiProgramFamilies = document.getElementById('kpiProgramFamilies');
@@ -97,42 +92,45 @@
     dom.kpiRawRowsNote = document.getElementById('kpiRawRowsNote');
 
     // Sidebar Controls
+    dom.controlSidebar = document.getElementById('controlSidebar');
+    dom.collapseSidebarBtn = document.getElementById('collapseSidebarBtn');
+    dom.expandSidebarBtn = document.getElementById('expandSidebarBtn');
+    dom.activeFiltersBadge = document.getElementById('activeFiltersBadge');
     dom.resetFiltersBtn = document.getElementById('resetFiltersBtn');
     dom.searchInput = document.getElementById('searchInput');
     dom.clearSearchBtn = document.getElementById('clearSearchBtn');
     dom.thresholdSlider = document.getElementById('thresholdSlider');
     dom.thresholdValueDisplay = document.getElementById('thresholdValueDisplay');
     dom.presetPills = document.querySelectorAll('.preset-pill');
-    dom.metricDirectionalBtn = document.getElementById('metricDirectionalBtn');
-    dom.metricJaccardBtn = document.getElementById('metricJaccardBtn');
-    dom.formulaCallout = document.getElementById('formulaCallout');
-    dom.statusActiveOnlyBtn = document.getElementById('statusActiveOnlyBtn');
-    dom.statusCheckboxes = document.querySelectorAll('input[name="programStatus"]');
-    dom.countStatusActive = document.getElementById('countStatusActive');
-    dom.countStatusReview = document.getElementById('countStatusReview');
-    dom.countStatusDraft = document.getElementById('countStatusDraft');
-    dom.countStatusDeactivated = document.getElementById('countStatusDeactivated');
 
-    // Discipline Multi-Select Dropdown
-    dom.disciplineDropdown = document.getElementById('disciplineDropdown');
-    dom.disciplineDropdownBtn = document.getElementById('disciplineDropdownBtn');
-    dom.disciplineTriggerLabel = document.getElementById('disciplineTriggerLabel');
-    dom.disciplineSelectionCount = document.getElementById('disciplineSelectionCount');
-    dom.disciplineDropdownMenu = document.getElementById('disciplineDropdownMenu');
+    // Discipline Accordion
+    dom.disciplineAccordion = document.getElementById('disciplineAccordion');
+    dom.disciplineAccordionBtn = document.getElementById('disciplineAccordionBtn');
+    dom.disciplineBadge = document.getElementById('disciplineBadge');
     dom.disciplineSearchInput = document.getElementById('disciplineSearchInput');
-    dom.selectAllDisciplinesBtn = document.getElementById('selectAllDisciplinesBtn');
-    dom.clearAllDisciplinesBtn = document.getElementById('clearAllDisciplinesBtn');
+    dom.clearDisciplinesBtn = document.getElementById('clearDisciplinesBtn');
     dom.disciplineOptionsList = document.getElementById('disciplineOptionsList');
+
+    // Program Titles Accordion
+    dom.programTitleAccordion = document.getElementById('programTitleAccordion');
+    dom.programTitleAccordionBtn = document.getElementById('programTitleAccordionBtn');
+    dom.programTitleBadge = document.getElementById('programTitleBadge');
+    dom.tierMiniBtns = document.querySelectorAll('.tier-mini-btn');
+    dom.programTitleSearchInput = document.getElementById('programTitleSearchInput');
+    dom.programListCountHint = document.getElementById('programListCountHint');
+    dom.clearProgramTitlesBtn = document.getElementById('clearProgramTitlesBtn');
+    dom.programTitleOptionsList = document.getElementById('programTitleOptionsList');
 
     // Sort & Toggles
     dom.sortBySelect = document.getElementById('sortBySelect');
     dom.onlyWithCertsToggle = document.getElementById('onlyWithCertsToggle');
     dom.excludeGeToggle = document.getElementById('excludeGeToggle');
 
-    // View Tabs
-    dom.viewTabs = document.querySelectorAll('.view-tab');
+    // View Tabs & Toolbar
+    dom.viewTabs = document.querySelectorAll('.plan-tab');
     dom.tabBadgeFamilies = document.getElementById('tabBadgeFamilies');
     dom.tabBadgeNetwork = document.getElementById('tabBadgeNetwork');
+    dom.resultsToolbarSummary = document.getElementById('resultsToolbarSummary');
     dom.familyBulkActions = document.getElementById('familyBulkActions');
     dom.expandAllFamiliesBtn = document.getElementById('expandAllFamiliesBtn');
     dom.collapseAllFamiliesBtn = document.getElementById('collapseAllFamiliesBtn');
@@ -143,7 +141,7 @@
     dom.viewMatrix = document.getElementById('viewMatrix');
     dom.familyCardsContainer = document.getElementById('familyCardsContainer');
 
-    // Network View Elements
+    // Network View
     dom.networkCanvas = document.getElementById('networkCanvas');
     dom.networkHideIsolatedToggle = document.getElementById('networkHideIsolatedToggle');
     dom.networkPhysicsBtn = document.getElementById('networkPhysicsBtn');
@@ -151,12 +149,12 @@
     dom.inspectorEmptyState = document.getElementById('inspectorEmptyState');
     dom.inspectorContent = document.getElementById('inspectorContent');
 
-    // Matrix View Elements
+    // Matrix View
     dom.matrixScopeSelect = document.getElementById('matrixScopeSelect');
     dom.matrixDimensionsBadge = document.getElementById('matrixDimensionsBadge');
     dom.matrixScrollContainer = document.getElementById('matrixScrollContainer');
 
-    // Modal & PDF Elements
+    // Modal & PDF
     dom.comparisonModalBackdrop = document.getElementById('comparisonModalBackdrop');
     dom.modalEyebrow = document.getElementById('modalEyebrow');
     dom.modalTitle = document.getElementById('modalTitle');
@@ -166,15 +164,12 @@
   }
 
   /* ------------------------------------------------------------------------
-   * 3. DATASET QUIRKS & NORMALIZATION PIPELINE
+   * 3. DATASET QUIRKS, ACTIVE-ONLY FILTERING & PRIMARY DISCIPLINE MAPPING
    * ------------------------------------------------------------------------ */
 
   /**
    * Classifies a Program Entity Title into 'Degree' or 'Certificate'.
-   * Handles edge cases such as 'Nursing VN to RN: Non-Degree Option Certificate'.
-   *
-   * @param {string} title - Official Program Entity Title
-   * @returns {'Degree' | 'Certificate'}
+   * Handles edge cases like 'Nursing VN to RN: Non-Degree Option Certificate'.
    */
   function classifyProgramTier(title) {
     const normalized = String(title || '').trim().toLowerCase();
@@ -201,11 +196,7 @@
   }
 
   /**
-   * Checks whether a program title is a General Education / Transfer breadth pattern
-   * (e.g., CSU-GE, IGETC, Cal-GETC, Chaffey General Education).
-   *
-   * @param {string} title
-   * @returns {boolean}
+   * Detects General Education / Transfer breadth patterns (Cal-GETC, CSU-GE, IGETC, Local GE).
    */
   function isGeneralEducationBreadth(title) {
     const t = String(title || '').toLowerCase();
@@ -218,111 +209,100 @@
   }
 
   /**
-   * Extracts initial metadata (unique disciplines & per-status program counts)
-   * from the raw CSV rows immediately upon parsing.
+   * Determines a program's true Primary Discipline / Home Department.
    *
-   * @param {Array<Object>} rows
+   * Why this matters:
+   * A degree like `Real Estate A.S. Degree` has 7 Real Estate courses,
+   * 2 Business Legal Studies courses, and 1 Accounting course (`ACCTG 1A`).
+   * Its primary department is `Real Estate`, NOT `Accounting`.
+   *
+   * Heuristic:
+   * 1. If the program is a General Education breadth pattern, return 'General Education / Transfer Breadth'.
+   * 2. If any course discipline name in the program appears directly in the Program Entity Title
+   *    (preferring longest match, then highest course count), use that discipline.
+   * 3. Check prefix before ':' (e.g., 'Nursing: Associate Degree' -> 'Nursing').
+   * 4. Otherwise, use the discipline with the highest deduplicated course count in the program.
    */
-  function indexRawDatasetMetadata(rows) {
-    state.rawRows = rows;
-    state.rawRowCount = rows.length;
-
-    const disciplineSet = new Set();
-    const programsByStatus = {
-      Active: new Set(),
-      'In Review': new Set(),
-      Draft: new Set(),
-      Deactivated: new Set()
-    };
-
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      const progTitle = String(row['Program Entity Title'] || row['Degree Path'] || '').trim();
-      if (!progTitle) continue;
-
-      const status = String(row['Program Status'] || 'Active').trim();
-      if (programsByStatus[status]) {
-        programsByStatus[status].add(progTitle);
-      }
-
-      const disc = String(row['Discipline'] || '').trim();
-      if (disc) {
-        disciplineSet.add(disc);
-      }
+  function determinePrimaryDiscipline(title, disciplineCountsMap, isGeBreadth) {
+    if (isGeBreadth) {
+      return 'General Education / Transfer Breadth';
+    }
+    const entries = Array.from(disciplineCountsMap.entries());
+    if (entries.length === 0) {
+      return 'Unspecified';
     }
 
-    state.allDisciplines = Array.from(disciplineSet).sort((a, b) => a.localeCompare(b));
-    state.filters.disciplines = new Set(state.allDisciplines);
+    const titleLower = String(title || '').toLowerCase();
 
-    state.statusCounts.Active = programsByStatus.Active.size;
-    state.statusCounts['In Review'] = programsByStatus['In Review'].size;
-    state.statusCounts.Draft = programsByStatus.Draft.size;
-    state.statusCounts.Deactivated = programsByStatus.Deactivated.size;
+    // 1. Direct discipline name match inside Program Title
+    const directMatches = entries.filter(([disc]) => titleLower.includes(disc.toLowerCase()));
+    if (directMatches.length > 0) {
+      directMatches.sort((a, b) => {
+        if (b[0].length !== a[0].length) return b[0].length - a[0].length;
+        return b[1] - a[1];
+      });
+      return directMatches[0][0];
+    }
 
-    // Update status count badges in UI
-    dom.countStatusActive.textContent = state.statusCounts.Active;
-    dom.countStatusReview.textContent = state.statusCounts['In Review'];
-    dom.countStatusDraft.textContent = state.statusCounts.Draft;
-    dom.countStatusDeactivated.textContent = state.statusCounts.Deactivated;
+    // 2. Prefix match before colon (e.g. "Nursing: Associate Degree" -> "Nursing")
+    const prefixMatches = entries.filter(([disc]) => {
+      if (!disc.includes(':')) return false;
+      const prefix = disc.split(':')[0].trim().toLowerCase();
+      return prefix.length > 2 && titleLower.includes(prefix);
+    });
+    if (prefixMatches.length > 0) {
+      prefixMatches.sort((a, b) => b[1] - a[1]);
+      return prefixMatches[0][0];
+    }
 
-    renderDisciplineDropdownOptions();
+    // 3. Majority / Modal course count discipline
+    entries.sort((a, b) => b[1] - a[1]);
+    return entries[0][0];
   }
 
   /**
-   * Deduplicates raw CSV rows for the currently selected lifecycle statuses.
-   *
-   * CRITICAL DATA GRAIN FIX:
-   * The source CSV flattens [Program Entity Title] x [PLO] x [Course Item].
-   * We deduplicate courses per program using the composite key:
-   *   `[Program Entity Title] + [Subject Code] + [Course Number]`
-   * Structural header rows (where Course Number is empty/null) are excluded
-   * from course lists.
+   * Ingests raw CSV rows, filters strictly to `Program Status === 'Active'`,
+   * and deduplicates courses per program using:
+   *   [Program Entity Title] + [Subject Code] + [Course Number]
    */
-  function buildDeduplicatedProgramsForActiveStatuses() {
+  function ingestActiveProgramsFromCsv(rows) {
+    state.rawRowCount = rows.length;
+    let activeRows = 0;
     const programsMap = new Map();
-    const statusPriority = { Active: 4, 'In Review': 3, Draft: 2, Deactivated: 1 };
 
-    for (let i = 0; i < state.rawRows.length; i++) {
-      const row = state.rawRows[i];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
       const status = String(row['Program Status'] || '').trim();
 
-      // Filter by selected Lifecycle Statuses first so deactivated versions
-      // of an active program do not pollute active course requirements.
-      if (!state.filters.statuses.has(status)) {
+      // Strictly focus on Active programs only
+      if (status !== 'Active') {
         continue;
       }
+      activeRows++;
 
       const title = String(row['Program Entity Title'] || row['Degree Path'] || '').trim();
       if (!title) continue;
 
       let prog = programsMap.get(title);
       if (!prog) {
+        const isGe = isGeneralEducationBreadth(title);
         prog = {
           title,
           tier: classifyProgramTier(title),
-          status,
+          status: 'Active',
           description: String(row['Program Description'] || '').trim(),
           implementationDate: String(row['Implementation Date'] || '').trim(),
           chancellorCode: String(row['Chancellor_s Office Unique Code'] || '').replace(/\.0$/, '').trim(),
           localCode: String(row['Local Code'] || '').trim(),
           controlNumber: String(row['Program Control Number'] || '').replace(/\.0$/, '').trim(),
-          isGeBreadth: isGeneralEducationBreadth(title),
-          coursesMap: new Map(),        // canonicalCourseId -> CourseObject
+          isGeBreadth: isGe,
+          coursesMap: new Map(),        // courseId -> Course Object
           courseIdsSet: new Set(),      // Set of canonical course IDs ("DRAFT 20")
-          disciplinesSet: new Set(),    // Set of academic disciplines in this program
-          disciplineCounts: new Map(),  // discipline -> course count (for primary discipline)
-          plosSet: new Set(),           // Deduplicated Program Learning Outcomes
-          totalUnits: 0                 // Deduplicated sum of Min Units
+          disciplineCounts: new Map(),  // discipline -> course count
+          plosSet: new Set(),           // Deduplicated PLOs
+          totalUnits: 0
         };
         programsMap.set(title, prog);
-      } else {
-        // If multiple statuses are checked, retain highest-priority lifecycle badge
-        if ((statusPriority[status] || 0) > (statusPriority[prog.status] || 0)) {
-          prog.status = status;
-        }
-        if (!prog.description && row['Program Description']) {
-          prog.description = String(row['Program Description']).trim();
-        }
       }
 
       // Collect distinct Program Learning Outcomes (PLOs)
@@ -331,7 +311,7 @@
         prog.plosSet.add(plo);
       }
 
-      // Exclude structural catalog block header rows where Course Number is null/empty
+      // Exclude structural header rows where Course Number is null/empty
       const courseNum = String(
         row['Course Number'] || row['Program_Course Block_Course Block Item Course Number'] || ''
       ).trim();
@@ -343,12 +323,8 @@
         continue;
       }
 
-      // Canonical Course Identifier: e.g., "DRAFT 20"
       const courseId = `${subjectCode} ${courseNum}`;
       const discipline = String(row['Discipline'] || '').trim();
-      if (discipline) {
-        prog.disciplinesSet.add(discipline);
-      }
 
       // Composite Key Deduplication: [Program Entity Title] + [Subject Code] + [Course Number]
       if (!prog.coursesMap.has(courseId)) {
@@ -357,10 +333,7 @@
         ).trim();
         const rawMinUnits = parseFloat(row['Min Units']);
         const minUnits = Number.isFinite(rawMinUnits) ? rawMinUnits : 0;
-        const rawMaxUnits = parseFloat(row['Max Units']);
-        const maxUnits = Number.isFinite(rawMaxUnits) ? rawMaxUnits : null;
         const blockTitle = String(row['Course Block Title'] || '').trim();
-        const groupTitle = String(row['Group Title'] || '').trim();
 
         prog.coursesMap.set(courseId, {
           courseId,
@@ -368,10 +341,8 @@
           courseNumber: courseNum,
           courseTitle,
           minUnits,
-          maxUnits,
           discipline: discipline || 'Unspecified',
-          blockTitle,
-          groupTitle
+          blockTitle
         });
 
         prog.courseIdsSet.add(courseId);
@@ -383,52 +354,64 @@
       }
     }
 
-    // Finalize derived arrays and primary discipline per program
-    for (const prog of programsMap.values()) {
+    // Remove any shell programs with 0 deduplicated courses and finalize primaryDiscipline
+    const primaryDiscStats = new Map();
+
+    for (const [title, prog] of programsMap.entries()) {
+      if (prog.coursesMap.size === 0) {
+        programsMap.delete(title);
+        continue;
+      }
+
       prog.totalUnits = Math.round(prog.totalUnits * 100) / 100;
       prog.coursesList = Array.from(prog.coursesMap.values()).sort((a, b) =>
         a.courseId.localeCompare(b.courseId, undefined, { numeric: true })
       );
-      prog.disciplinesList = Array.from(prog.disciplinesSet).sort();
-
-      // Determine primary discipline (most courses in that discipline)
-      let topDisc = 'General / Interdisciplinary';
-      let maxCount = 0;
-      for (const [disc, cnt] of prog.disciplineCounts.entries()) {
-        if (cnt > maxCount) {
-          maxCount = cnt;
-          topDisc = disc;
-        }
-      }
-      prog.primaryDiscipline = topDisc;
       prog.plosList = Array.from(prog.plosSet);
+      prog.primaryDiscipline = determinePrimaryDiscipline(
+        prog.title,
+        prog.disciplineCounts,
+        prog.isGeBreadth
+      );
+
+      if (!primaryDiscStats.has(prog.primaryDiscipline)) {
+        primaryDiscStats.set(prog.primaryDiscipline, {
+          name: prog.primaryDiscipline,
+          count: 0,
+          degreeCount: 0,
+          certCount: 0
+        });
+      }
+      const stat = primaryDiscStats.get(prog.primaryDiscipline);
+      stat.count++;
+      if (prog.tier === 'Degree') stat.degreeCount++;
+      else stat.certCount++;
     }
 
+    state.activeRowCount = activeRows;
     state.programsMap = programsMap;
+    state.primaryDisciplines = Array.from(primaryDiscStats.values()).sort((a, b) =>
+      a.name.localeCompare(b.name)
+    );
+
+    renderDisciplineFilterList();
+    renderProgramTitleFilterList();
   }
 
   /* ------------------------------------------------------------------------
-   * 4. OVERLAP & STACKABLE FAMILY ALGORITHM ENGINE
+   * 4. DIRECTIONAL STACKABLE OVERLAP ENGINE
    * ------------------------------------------------------------------------ */
 
   /**
-   * Computes directional and bidirectional overlap metrics between a Degree (D)
-   * and a Certificate (C).
-   *
-   * Metrics Calculated:
+   * Computes directional stackability metrics between Degree D and Certificate C:
    * - Shared Courses: S_D ∩ S_C
-   * - Stackable Overlap % (Directional): (|S_D ∩ S_C| / |S_C|) * 100
-   * - Jaccard Similarity % (Bidirectional): (|S_D ∩ S_C| / |S_D ∪ S_C|) * 100
-   * - Overlapping Units %: (Sum of Min Units in Shared / Sum of Min Units in S_C) * 100
+   * - Stackable Overlap %: (|S_D ∩ S_C| / |S_C|) * 100
+   * - Overlapping Units %: (Sum of Min Units for Shared / Sum of Min Units in S_C) * 100
    * - Degree Completion Contribution %: (|S_D ∩ S_C| / |S_D|) * 100
-   *
-   * @param {Object} degree - Deduplicated Degree Program entity
-   * @param {Object} cert - Deduplicated Certificate Program entity
-   * @returns {Object} Overlap analysis object
    */
   function computePairOverlap(degree, cert) {
     const sharedCourses = [];
-    const certGapCourses = []; // In Certificate C, but missing from Degree D
+    const certGapCourses = [];
     let sharedUnits = 0;
 
     for (const course of cert.coursesList) {
@@ -440,7 +423,7 @@
       }
     }
 
-    const degreeOnlyCourses = []; // In Degree D, beyond Certificate C
+    const degreeOnlyCourses = [];
     for (const course of degree.coursesList) {
       if (!cert.coursesMap.has(course.courseId)) {
         degreeOnlyCourses.push(course);
@@ -450,23 +433,15 @@
     const dCount = degree.coursesList.length;
     const cCount = cert.coursesList.length;
     const sharedCount = sharedCourses.length;
-    const unionCount = dCount + cCount - sharedCount;
 
     const stackableOverlapPct = cCount > 0 ? (sharedCount / cCount) * 100 : 0;
-    const jaccardOverlapPct = unionCount > 0 ? (sharedCount / unionCount) * 100 : 0;
     const degreeContributionPct = dCount > 0 ? (sharedCount / dCount) * 100 : 0;
-
     const overlappingUnitsPct =
       cert.totalUnits > 0 ? (sharedUnits / cert.totalUnits) * 100 : stackableOverlapPct;
-    const degreeUnitsContributionPct =
-      degree.totalUnits > 0 ? (sharedUnits / degree.totalUnits) * 100 : 0;
 
     const certAdditionalUnits = Math.max(0, Math.round((cert.totalUnits - sharedUnits) * 100) / 100);
     const degreeRemainingUnits = Math.max(0, Math.round((degree.totalUnits - sharedUnits) * 100) / 100);
     sharedUnits = Math.round(sharedUnits * 100) / 100;
-
-    const activeOverlapPct =
-      state.filters.metricMode === 'jaccard' ? jaccardOverlapPct : stackableOverlapPct;
 
     return {
       degree,
@@ -481,111 +456,68 @@
       certAdditionalUnits,
       degreeRemainingUnits,
       stackableOverlapPct,
-      jaccardOverlapPct,
-      activeOverlapPct,
       overlappingUnitsPct,
       degreeContributionPct,
-      degreeUnitsContributionPct,
       isEmbeddedMilestone: sharedCount === cCount && cCount > 0
     };
   }
 
   /**
-   * Checks if a program matches the user's current Discipline and Search filters.
-   *
-   * @param {Object} prog - Program object
-   * @param {string} searchLower - Lowercase search query
-   * @returns {boolean}
+   * Checks if a program matches the keyword search bar (Course ID, Course Title, or Program Title).
    */
-  function programMatchesFilters(prog, searchLower) {
-    // Exclude programs with 0 deduplicated courses
-    if (prog.coursesList.length === 0) {
-      return false;
-    }
-
-    // Optional GE Breadth filter
-    if (state.filters.excludeGe && prog.isGeBreadth) {
-      return false;
-    }
-
-    // Discipline filter: include program if any of its disciplines are selected
-    if (state.filters.disciplines.size === 0) {
-      return false;
-    }
-    if (state.filters.disciplines.size < state.allDisciplines.length) {
-      let hasMatchingDiscipline = false;
-      for (const d of prog.disciplinesSet) {
-        if (state.filters.disciplines.has(d)) {
-          hasMatchingDiscipline = true;
-          break;
-        }
+  function matchesKeywordSearch(prog, searchLower) {
+    if (!searchLower) return true;
+    if (prog.title.toLowerCase().includes(searchLower)) return true;
+    if (prog.primaryDiscipline.toLowerCase().includes(searchLower)) return true;
+    for (const c of prog.coursesList) {
+      if (
+        c.courseId.toLowerCase().includes(searchLower) ||
+        c.courseTitle.toLowerCase().includes(searchLower)
+      ) {
+        return true;
       }
-      if (!hasMatchingDiscipline) return false;
     }
-
-    // Search query filter (matches Program Title, Course ID, or Course Title)
-    if (searchLower) {
-      const titleMatch = prog.title.toLowerCase().includes(searchLower);
-      const discMatch = prog.primaryDiscipline.toLowerCase().includes(searchLower);
-      let courseMatch = false;
-      if (!titleMatch && !discMatch) {
-        for (const c of prog.coursesList) {
-          if (
-            c.courseId.toLowerCase().includes(searchLower) ||
-            c.courseTitle.toLowerCase().includes(searchLower)
-          ) {
-            courseMatch = true;
-            break;
-          }
-        }
-      }
-      return titleMatch || discMatch || courseMatch;
-    }
-
-    return true;
+    return false;
   }
 
   /**
-   * Runs the full analytical pipeline:
-   * 1. Deduplicates programs for active statuses
-   * 2. Applies discipline, GE, and search filters
-   * 3. Computes Degree x Certificate overlaps and forms Program Families
-   * 4. Updates KPIs and triggers active view rendering
+   * Runs the full analytical pipeline with Discipline, Program Title, Threshold,
+   * and Keyword filters.
    */
   function runAnalysisPipeline() {
-    buildDeduplicatedProgramsForActiveStatuses();
-
     const searchLower = state.filters.searchQuery.trim().toLowerCase();
     const threshold = state.filters.threshold;
+    const selectedDiscs = state.filters.selectedDisciplines;
+    const selectedTitles = state.filters.selectedProgramTitles;
 
-    const allDegrees = [];
-    const allCerts = [];
+    // Determine if the user selected specific Degree titles vs Certificate titles
+    const selectedDegreeTitles = new Set();
+    const selectedCertTitles = new Set();
+    for (const t of selectedTitles) {
+      const p = state.programsMap.get(t);
+      if (!p) continue;
+      if (p.tier === 'Degree') selectedDegreeTitles.add(t);
+      else selectedCertTitles.add(t);
+    }
+
+    const candidateDegrees = [];
+    const allActiveCerts = [];
 
     for (const prog of state.programsMap.values()) {
       if (state.filters.excludeGe && prog.isGeBreadth) continue;
-      if (prog.coursesList.length === 0) continue;
 
       if (prog.tier === 'Degree') {
-        allDegrees.push(prog);
+        // Filter Degrees by Primary Discipline (if any discipline is selected)
+        if (selectedDiscs.size > 0 && !selectedDiscs.has(prog.primaryDiscipline)) {
+          continue;
+        }
+        // If specific Degree titles are checked, restrict to those Degrees
+        if (selectedDegreeTitles.size > 0 && !selectedDegreeTitles.has(prog.title)) {
+          continue;
+        }
+        candidateDegrees.push(prog);
       } else {
-        allCerts.push(prog);
-      }
-    }
-
-    // Filter Degrees & Certificates by Discipline & Search
-    // Note: If a user searches for a specific Certificate or Degree, we also keep
-    // qualifying family members connected to matched programs so families stay intact!
-    const directMatchedDegrees = new Set();
-    const directMatchedCerts = new Set();
-
-    for (const d of allDegrees) {
-      if (programMatchesFilters(d, searchLower)) {
-        directMatchedDegrees.add(d.title);
-      }
-    }
-    for (const c of allCerts) {
-      if (programMatchesFilters(c, searchLower)) {
-        directMatchedCerts.add(c.title);
+        allActiveCerts.push(prog);
       }
     }
 
@@ -595,21 +527,20 @@
     const includedDegreesMap = new Map();
     const includedCertsMap = new Map();
 
-    for (const degree of allDegrees) {
-      const degreeMatchesDirectly = directMatchedDegrees.has(degree.title);
+    for (const degree of candidateDegrees) {
+      const degreeMatchesSearch = matchesKeywordSearch(degree, searchLower);
       const qualifyingCerts = [];
 
-      for (const cert of allCerts) {
-        const certMatchesDirectly = directMatchedCerts.has(cert.title);
+      for (const cert of allActiveCerts) {
+        // If the user explicitly selected specific Certificate titles in Program Titles,
+        // only evaluate those certificates!
+        if (selectedCertTitles.size > 0 && !selectedCertTitles.has(cert.title)) {
+          continue;
+        }
 
-        // At least one of the two programs must match the active discipline/search filter,
-        // and both must pass discipline filter if no search query is active
-        if (!searchLower) {
-          if (!degreeMatchesDirectly || !certMatchesDirectly) continue;
-        } else {
-          if (!degreeMatchesDirectly && !certMatchesDirectly) continue;
-          // Ensure discipline filter still applies when searching
-          if (!programMatchesFilters(degree, '') || !programMatchesFilters(cert, '')) continue;
+        const certMatchesSearch = matchesKeywordSearch(cert, searchLower);
+        if (searchLower && !degreeMatchesSearch && !certMatchesSearch) {
+          continue;
         }
 
         const pairResult = computePairOverlap(degree, cert);
@@ -617,7 +548,7 @@
           pairLookupMap.set(`${degree.title}|||${cert.title}`, pairResult);
         }
 
-        if (pairResult.activeOverlapPct >= threshold) {
+        if (pairResult.stackableOverlapPct >= threshold) {
           qualifyingCerts.push(pairResult);
           allQualifyingPairs.push(pairResult);
           includedDegreesMap.set(degree.title, degree);
@@ -625,21 +556,22 @@
         }
       }
 
-      // Sort qualifying certificates within each family by activeOverlapPct DESC, then sharedUnits DESC
+      // Sort qualifying certificates by Stackable Overlap % DESC, then Shared Units DESC
       qualifyingCerts.sort((a, b) => {
-        if (Math.abs(b.activeOverlapPct - a.activeOverlapPct) > 0.001) {
-          return b.activeOverlapPct - a.activeOverlapPct;
+        if (Math.abs(b.stackableOverlapPct - a.stackableOverlapPct) > 0.001) {
+          return b.stackableOverlapPct - a.stackableOverlapPct;
         }
         return b.sharedUnits - a.sharedUnits;
       });
 
-      const shouldIncludeFamily = state.filters.onlyWithCerts
-        ? qualifyingCerts.length > 0
-        : degreeMatchesDirectly || qualifyingCerts.length > 0;
+      // If user explicitly checked a Degree Title or unchecked "Only Degrees with >=1 cert",
+      // show the Degree card even if 0 certs meet the threshold
+      const forceShowDegree =
+        selectedDegreeTitles.has(degree.title) || !state.filters.onlyWithCerts;
 
-      if (shouldIncludeFamily) {
+      if (qualifyingCerts.length > 0 || (forceShowDegree && degreeMatchesSearch)) {
         const maxOverlap =
-          qualifyingCerts.length > 0 ? qualifyingCerts[0].activeOverlapPct : 0;
+          qualifyingCerts.length > 0 ? qualifyingCerts[0].stackableOverlapPct : 0;
         const embeddedCount = qualifyingCerts.filter((q) => q.isEmbeddedMilestone).length;
 
         families.push({
@@ -652,14 +584,16 @@
       }
     }
 
-    // Include standalone matched certificates in filteredCerts
-    for (const c of allCerts) {
-      if (directMatchedCerts.has(c.title)) {
-        includedCertsMap.set(c.title, c);
-      }
+    // Also include certificates that match the active Discipline & Program Title filters
+    for (const cert of allActiveCerts) {
+      if (selectedDiscs.size > 0 && !selectedDiscs.has(cert.primaryDiscipline)) continue;
+      if (selectedCertTitles.size > 0 && !selectedCertTitles.has(cert.title)) continue;
+      if (selectedDegreeTitles.size > 0 && selectedCertTitles.size === 0) continue;
+      if (!matchesKeywordSearch(cert, searchLower)) continue;
+      includedCertsMap.set(cert.title, cert);
     }
 
-    // Sort Program Families according to user selection
+    // Sort Program Families
     const sortBy = state.filters.sortBy;
     families.sort((a, b) => {
       if (sortBy === 'certCount') {
@@ -689,7 +623,7 @@
     state.allQualifyingPairs = allQualifyingPairs;
     state.pairLookupMap = pairLookupMap;
 
-    // Auto-expand top 4 program families on initial load if none expanded
+    // Auto-expand top 4 families if none are currently expanded
     if (state.expandedFamilies.size === 0 && families.length > 0) {
       for (let i = 0; i < Math.min(4, families.length); i++) {
         const fam = families[i];
@@ -700,15 +634,15 @@
       }
     }
 
-    updateKpiSummaryRibbon();
+    updateKpisAndFilterBadges();
     renderActiveView();
   }
 
   /* ------------------------------------------------------------------------
-   * 5. KPI RIBBON & UI RENDERING
+   * 5. KPI RIBBON & SIDEBAR FILTER LIST RENDERING
    * ------------------------------------------------------------------------ */
 
-  function updateKpiSummaryRibbon() {
+  function updateKpisAndFilterBadges() {
     const degCount = state.filteredDegrees.length;
     const certCount = state.filteredCerts.length;
     const totalProgs = degCount + certCount;
@@ -717,12 +651,37 @@
       (f) => f.qualifyingCerts.length > 0
     ).length;
 
+    // Calculate total candidate degrees in current discipline scope for radial percentage
+    let totalCandidateDegreesInScope = 0;
+    for (const prog of state.programsMap.values()) {
+      if (prog.tier !== 'Degree') continue;
+      if (state.filters.excludeGe && prog.isGeBreadth) continue;
+      if (
+        state.filters.selectedDisciplines.size > 0 &&
+        !state.filters.selectedDisciplines.has(prog.primaryDiscipline)
+      ) {
+        continue;
+      }
+      totalCandidateDegreesInScope++;
+    }
+
+    const stackableRatePct =
+      totalCandidateDegreesInScope > 0
+        ? Math.round((familiesWithCerts / totalCandidateDegreesInScope) * 100)
+        : 0;
+
+    dom.kpiRadialPath.setAttribute('stroke-dasharray', `${stackableRatePct}, 100`);
+    dom.kpiRadialPct.textContent = `${stackableRatePct}%`;
+    dom.kpiProgramFamilies.textContent = `${familiesWithCerts} ${
+      familiesWithCerts === 1 ? 'Family' : 'Families'
+    }`;
+    dom.kpiFamilySubtext.textContent = `of ${totalCandidateDegreesInScope} active degrees (≥${state.filters.threshold}%)`;
+
     const totalPairs = state.allQualifyingPairs.length;
     const embeddedMilestonePairs = state.allQualifyingPairs.filter(
       (p) => p.isEmbeddedMilestone
     ).length;
 
-    // Count unique catalog courses across all filtered programs
     const uniqueCourses = new Set();
     let deduplicatedProgramCoursePairs = 0;
     for (const d of state.filteredDegrees) {
@@ -737,24 +696,149 @@
     dom.kpiTotalPrograms.textContent = totalProgs.toLocaleString();
     dom.kpiProgramSplit.textContent = `${degCount} Degrees • ${certCount} Certificates`;
 
-    dom.kpiProgramFamilies.textContent = familiesWithCerts.toLocaleString();
-    dom.kpiFamilySubtext.textContent = `Degrees with ≥1 cert at ≥${state.filters.threshold}%`;
-
     dom.kpiStackablePairs.textContent = totalPairs.toLocaleString();
-    dom.kpiPairsSubtext.textContent =
-      state.filters.metricMode === 'jaccard'
-        ? `Jaccard similarity ≥ ${state.filters.threshold}%`
-        : `Directional overlap ≥ ${state.filters.threshold}%`;
+    dom.kpiPairsSubtext.textContent = `Cert overlap ≥ ${state.filters.threshold}%`;
 
     dom.kpiEmbeddedCerts.textContent = embeddedMilestonePairs.toLocaleString();
 
     dom.kpiUniqueCourses.textContent = uniqueCourses.size.toLocaleString();
-    dom.kpiRawRowsNote.textContent = `${deduplicatedProgramCoursePairs.toLocaleString()} distinct reqs (from ${state.rawRowCount.toLocaleString()} CSV rows)`;
+    dom.kpiRawRowsNote.textContent = `${deduplicatedProgramCoursePairs.toLocaleString()} distinct reqs`;
 
-    // Update View Tab Badges
+    // Update View Tab Counters
     dom.tabBadgeFamilies.textContent = state.programFamilies.length;
     dom.tabBadgeNetwork.textContent = totalPairs;
+
+    // Update Horizon Scope Tag & Results Toolbar Summary
+    const discCount = state.filters.selectedDisciplines.size;
+    const titleCount = state.filters.selectedProgramTitles.size;
+    let scopeLabel = 'All Disciplines';
+    if (discCount === 1) {
+      scopeLabel = Array.from(state.filters.selectedDisciplines)[0];
+    } else if (discCount > 1) {
+      scopeLabel = `${discCount} Disciplines`;
+    }
+    if (titleCount > 0) {
+      scopeLabel += ` • ${titleCount} Program(s)`;
+    }
+    dom.activeFilterSummaryTag.innerHTML = `<span>Scope: ${escapeHtml(scopeLabel)}</span>`;
+
+    const activeFilterCount =
+      (discCount > 0 ? 1 : 0) +
+      (titleCount > 0 ? 1 : 0) +
+      (state.filters.searchQuery.trim() ? 1 : 0) +
+      (state.filters.threshold !== 80 ? 1 : 0);
+
+    dom.activeFiltersBadge.textContent =
+      activeFilterCount > 0 ? `${activeFilterCount} Active Filter(s)` : 'Default Scope';
+
+    dom.resultsToolbarSummary.innerHTML = `Showing <strong>${state.programFamilies.length}</strong> Degree Program ${
+      state.programFamilies.length === 1 ? 'Family' : 'Families'
+    } and <strong>${totalPairs}</strong> Stackable Certificate ${
+      totalPairs === 1 ? 'Pathway' : 'Pathways'
+    } (&ge;${state.filters.threshold}% overlap) in <strong>${escapeHtml(scopeLabel)}</strong>`;
   }
+
+  /**
+   * Renders the Discipline / Department checkbox list in the sidebar.
+   * Clicking any discipline immediately filters to that primary department.
+   */
+  function renderDisciplineFilterList() {
+    const query = dom.disciplineSearchInput.value.trim().toLowerCase();
+    const selected = state.filters.selectedDisciplines;
+
+    if (selected.size === 0) {
+      dom.disciplineBadge.textContent = 'All';
+      dom.disciplineBadge.classList.remove('active');
+    } else {
+      dom.disciplineBadge.textContent = `${selected.size} Selected`;
+      dom.disciplineBadge.classList.add('active');
+    }
+
+    const rowsHtml = state.primaryDisciplines
+      .filter((d) => {
+        if (state.filters.excludeGe && d.name === 'General Education / Transfer Breadth') {
+          return false;
+        }
+        return !query || d.name.toLowerCase().includes(query);
+      })
+      .map((d) => {
+        const isChecked = selected.has(d.name);
+        return `
+          <label class="checkbox-label ${isChecked ? 'checked-row' : ''}">
+            <input type="checkbox" class="js-discipline-check" value="${escapeHtml(d.name)}" ${
+          isChecked ? 'checked' : ''
+        } />
+            <span class="checkbox-text" title="${escapeHtml(d.name)} (${d.degreeCount} Deg, ${
+          d.certCount
+        } Cert)">${escapeHtml(d.name)}</span>
+            <span class="checkbox-count">${d.count}</span>
+          </label>
+        `;
+      })
+      .join('');
+
+    dom.disciplineOptionsList.innerHTML =
+      rowsHtml || `<div class="accordion-hint">No matching disciplines found.</div>`;
+  }
+
+  /**
+   * Renders the Program Titles checkbox list in the sidebar.
+   * Dynamically respects the active Discipline filter and Tier mini-tabs
+   * ('All' | 'Degrees' | 'Certificates') so users can easily pick specific programs.
+   */
+  function renderProgramTitleFilterList() {
+    const query = dom.programTitleSearchInput.value.trim().toLowerCase();
+    const tierFilter = state.filters.programListTierFilter;
+    const selectedDiscs = state.filters.selectedDisciplines;
+    const selectedTitles = state.filters.selectedProgramTitles;
+
+    if (selectedTitles.size === 0) {
+      dom.programTitleBadge.textContent = 'All';
+      dom.programTitleBadge.classList.remove('active');
+    } else {
+      dom.programTitleBadge.textContent = `${selectedTitles.size} Selected`;
+      dom.programTitleBadge.classList.add('active');
+    }
+
+    const matchingPrograms = Array.from(state.programsMap.values())
+      .filter((p) => {
+        if (state.filters.excludeGe && p.isGeBreadth) return false;
+        // Keep already-checked titles visible even if discipline changes
+        if (selectedTitles.has(p.title)) return true;
+        if (selectedDiscs.size > 0 && !selectedDiscs.has(p.primaryDiscipline)) return false;
+        if (tierFilter !== 'all' && p.tier !== tierFilter) return false;
+        if (query && !p.title.toLowerCase().includes(query)) return false;
+        return true;
+      })
+      .sort((a, b) => a.title.localeCompare(b.title));
+
+    dom.programListCountHint.textContent = `${matchingPrograms.length} active program(s) listed`;
+
+    const rowsHtml = matchingPrograms
+      .map((p) => {
+        const isChecked = selectedTitles.has(p.title);
+        const shortTier = p.tier === 'Degree' ? 'DEG' : 'CERT';
+        return `
+          <label class="checkbox-label ${isChecked ? 'checked-row' : ''}">
+            <input type="checkbox" class="js-program-title-check" value="${escapeHtml(p.title)}" ${
+          isChecked ? 'checked' : ''
+        } />
+            <span class="checkbox-text" title="${escapeHtml(p.title)} (${escapeHtml(
+          p.primaryDiscipline
+        )})">${escapeHtml(p.title)}</span>
+            <span class="checkbox-count">${shortTier}</span>
+          </label>
+        `;
+      })
+      .join('');
+
+    dom.programTitleOptionsList.innerHTML =
+      rowsHtml || `<div class="accordion-hint">No matching programs found.</div>`;
+  }
+
+  /* ------------------------------------------------------------------------
+   * 6. VIEW 1: STACKABLE FAMILY EXPLORER (CARD/TREE DECK)
+   * ------------------------------------------------------------------------ */
 
   function renderActiveView() {
     if (state.activeView === 'families') {
@@ -765,10 +849,6 @@
       renderCrosswalkMatrixView();
     }
   }
-
-  /* ------------------------------------------------------------------------
-   * 6. VIEW 1: STACKABLE FAMILY EXPLORER (CARD/TREE DECK)
-   * ------------------------------------------------------------------------ */
 
   function getOverlapBadgeClass(pct, isEmbedded) {
     if (isEmbedded || pct >= 99.95) return 'overlap-100';
@@ -791,14 +871,6 @@
       .replace(/'/g, '&#39;');
   }
 
-  /**
-   * Generates the HTML markup for a Course Gap Checklist (used both inline inside
-   * a Family Card and inside the comparison Modal).
-   *
-   * @param {Object} pair - Computed OverlapPairResult
-   * @param {boolean} isModal - Whether rendered inside the full modal dialog
-   * @returns {string} HTML string
-   */
   function buildCourseGapChecklistHtml(pair, isModal) {
     const {
       degree,
@@ -813,7 +885,6 @@
       certAdditionalUnits,
       degreeRemainingUnits,
       stackableOverlapPct,
-      jaccardOverlapPct,
       overlappingUnitsPct,
       degreeContributionPct,
       isEmbeddedMilestone
@@ -832,12 +903,12 @@
           </div>`
           )
           .join('')
-      : `<div class="control-hint">No shared courses found.</div>`;
+      : `<div class="accordion-hint">No shared courses found.</div>`;
 
     const certGapBadgesHtml = isEmbeddedMilestone
       ? `<div class="milestone-celebration-banner">
            &#127942; <strong>100% Embedded Milestone!</strong><br/>
-           Every course required for <em>${escapeHtml(cert.title)}</em> is already part of <em>${escapeHtml(degree.title)}</em>. Students earn this certificate automatically with <strong>0 extra courses</strong>.
+           Every course required for <em>${escapeHtml(cert.title)}</em> is already embedded in <em>${escapeHtml(degree.title)}</em>. Students earn this certificate automatically with <strong>0 extra courses</strong>.
          </div>`
       : certGapCourses
           .map(
@@ -865,7 +936,7 @@
           </div>`
           )
           .join('')
-      : `<div class="milestone-celebration-banner">All degree courses are covered by this certificate!</div>`;
+      : `<div class="milestone-celebration-banner">All degree major courses are satisfied by this certificate!</div>`;
 
     return `
       <div class="${isModal ? 'modal-checklist-wrapper' : 'gap-checklist-drawer'}">
@@ -875,10 +946,9 @@
               Course Gap Checklist: ${escapeHtml(cert.title)} &rarr; ${escapeHtml(degree.title)}
             </h4>
             <div class="drawer-subtitle">
-              Stackable Subsumption: <strong>${stackableOverlapPct.toFixed(1)}%</strong> (${sharedCount}/${certCourseCount} cert courses) &bull;
-              Unit Overlap: <strong>${overlappingUnitsPct.toFixed(1)}%</strong> &bull;
-              Degree Completion Knocked Out: <strong>${degreeContributionPct.toFixed(1)}%</strong> (${sharedCount}/${degreeCourseCount} degree courses) &bull;
-              Jaccard Similarity: <strong>${jaccardOverlapPct.toFixed(1)}%</strong>
+              Stackable Overlap: <strong>${stackableOverlapPct.toFixed(1)}%</strong> (${sharedCount}/${certCourseCount} cert courses) &bull;
+              Overlapping Units: <strong>${overlappingUnitsPct.toFixed(1)}%</strong> &bull;
+              Degree Completion Contribution: <strong>${degreeContributionPct.toFixed(1)}%</strong> (${sharedCount}/${degreeCourseCount} degree courses)
             </div>
           </div>
           ${
@@ -886,13 +956,12 @@
               ? `<button type="button" class="btn btn-secondary btn-xs js-open-pair-modal"
                    data-degree="${escapeHtml(degree.title)}"
                    data-cert="${escapeHtml(cert.title)}">
-                   Full Side-by-Side &amp; PLOs
+                   Full Side-by-Side Modal
                  </button>`
               : ''
           }
         </div>
 
-        <!-- 4-Card Unit Tally Breakdown -->
         <div class="unit-tally-grid">
           <div class="tally-box tally-box-green">
             <div class="tally-label">Units Shared (Embedded)</div>
@@ -916,7 +985,6 @@
           </div>
         </div>
 
-        <!-- 3-Column Course Comparison -->
         <div class="checklist-columns">
           <div class="checklist-col">
             <div class="checklist-col-header col-header-green">
@@ -957,8 +1025,8 @@
     if (families.length === 0) {
       dom.familyCardsContainer.innerHTML = `
         <div class="empty-state-box">
-          <h3>No Program Families Match Current Filter Criteria</h3>
-          <p>Try lowering the <strong>Min Overlap Threshold</strong> slider (currently ${state.filters.threshold}%), clearing the search bar, or enabling additional disciplines.</p>
+          <h3>No Active Program Families Match Your Current Filters</h3>
+          <p style="margin-top:0.4rem;">Try lowering the <strong>Min Overlap Threshold</strong> slider (currently ${state.filters.threshold}%), unchecking filters in the sidebar, or clicking <strong>Reset All</strong>.</p>
         </div>
       `;
       return;
@@ -970,9 +1038,7 @@
       const { degree, qualifyingCerts, embeddedCount } = family;
       const isExpanded = state.expandedFamilies.has(degree.title);
       const selectedCertTitle = state.selectedCertByDegree.get(degree.title) || null;
-      const statusClass = `status-pill-${degree.status.replace(/\s+/g, '')}`;
 
-      // Find currently selected certificate pair for inline drawer
       let activeDrawerPair = null;
       if (selectedCertTitle) {
         activeDrawerPair = qualifyingCerts.find((p) => p.cert.title === selectedCertTitle) || null;
@@ -983,7 +1049,7 @@
           ? `<div class="cert-cards-grid">
               ${qualifyingCerts
                 .map((pair) => {
-                  const pct = pair.activeOverlapPct;
+                  const pct = pair.stackableOverlapPct;
                   const badgeClass = getOverlapBadgeClass(pct, pair.isEmbeddedMilestone);
                   const fillClass = getProgressFillClass(pct, pair.isEmbeddedMilestone);
                   const isSelected = selectedCertTitle === pair.cert.title;
@@ -1000,10 +1066,9 @@
                             <span class="tier-pill tier-cert">${
                               pair.isEmbeddedMilestone ? '&#9733; 100% Milestone' : 'Certificate'
                             }</span>
-                            <span class="status-pill status-pill-${pair.cert.status.replace(
-                              /\s+/g,
-                              ''
-                            )}">${escapeHtml(pair.cert.status)}</span>
+                            <span class="discipline-tag">${escapeHtml(
+                              pair.cert.primaryDiscipline
+                            )}</span>
                           </div>
                           <h4 class="cert-card-title">${escapeHtml(pair.cert.title)}</h4>
                         </div>
@@ -1032,7 +1097,7 @@
                         <span>${
                           isSelected
                             ? '&#9660; Viewing Course Gap Checklist below'
-                            : '&#9654; Click to inspect Course Gap Checklist'
+                            : '&#9654; Click to view Course Gap Checklist'
                         }</span>
                         <span>${
                           pair.certGapCourses.length === 0
@@ -1045,24 +1110,15 @@
                 })
                 .join('')}
             </div>`
-          : `<div class="control-hint">No certificates meet the ${state.filters.threshold}% overlap threshold for this degree.</div>`;
+          : `<div class="accordion-hint">No active certificates meet the ${state.filters.threshold}% overlap threshold for this degree.</div>`;
 
       htmlChunks.push(`
         <article class="family-card" data-degree-card="${escapeHtml(degree.title)}">
           <div class="family-card-header js-toggle-family" data-degree="${escapeHtml(degree.title)}">
             <div class="family-degree-info">
               <div class="family-badges-row">
-                <span class="tier-pill tier-degree">Associate Degree Anchor</span>
-                <span class="status-pill ${statusClass}">${escapeHtml(degree.status)}</span>
-                ${degree.disciplinesList
-                  .slice(0, 3)
-                  .map((d) => `<span class="discipline-tag">${escapeHtml(d)}</span>`)
-                  .join('')}
-                ${
-                  degree.disciplinesList.length > 3
-                    ? `<span class="discipline-tag">+${degree.disciplinesList.length - 3} more</span>`
-                    : ''
-                }
+                <span class="tier-pill tier-degree">Associate Degree</span>
+                <span class="discipline-tag">${escapeHtml(degree.primaryDiscipline)}</span>
               </div>
               <h3 class="family-degree-title">${escapeHtml(degree.title)}</h3>
               <div class="family-degree-meta">
@@ -1071,7 +1127,7 @@
                 <span><strong>${degree.totalUnits}</strong> Min Catalog Units</span>
                 ${
                   embeddedCount > 0
-                    ? `<span>&bull;</span><span style="color: var(--accent-gold); font-weight: 700;">&#9733; ${embeddedCount} Automatic 100% Milestone(s)</span>`
+                    ? `<span>&bull;</span><span class="text-amber" style="font-weight: 700;">&#9733; ${embeddedCount} Automatic 100% Milestone(s)</span>`
                     : ''
                 }
                 ${
@@ -1083,7 +1139,7 @@
             </div>
 
             <div class="family-header-right">
-              <button type="button" class="btn btn-ghost btn-xs js-inspect-program" data-program="${escapeHtml(
+              <button type="button" class="btn btn-secondary btn-xs js-inspect-program" data-program="${escapeHtml(
                 degree.title
               )}" title="Inspect full Degree course blocks and Program Learning Outcomes">
                 Degree Courses &amp; PLOs
@@ -1136,7 +1192,6 @@
     const nodesArray = [];
     const edgesArray = [];
 
-    // Build Degree Nodes (Chaffey Crimson #990000)
     for (const deg of state.filteredDegrees) {
       if (hideIsolated && !connectedDegrees.has(deg.title)) continue;
       const sizeVal = Math.max(16, Math.min(42, 12 + Math.sqrt(deg.totalUnits) * 2.6));
@@ -1144,25 +1199,24 @@
       nodesArray.push({
         id: deg.title,
         label: truncateText(deg.title, 34),
-        title: `${deg.title}\nTier: Associate Degree (${deg.status})\nCourses: ${deg.coursesList.length} | Units: ${deg.totalUnits}`,
+        title: `${deg.title}\nDepartment: ${deg.primaryDiscipline}\nCourses: ${deg.coursesList.length} | Units: ${deg.totalUnits}`,
         shape: 'dot',
         size: sizeVal,
         color: {
           background: '#990000',
-          border: '#FCA5A5',
-          highlight: { background: '#DC2626', border: '#FFFFFF' }
+          border: '#fca5a5',
+          highlight: { background: '#dc2626', border: '#ffffff' }
         },
         font: {
-          color: isDark ? '#F8FAFC' : '#1F2937',
+          color: isDark ? '#f8fafc' : '#0f172a',
           size: 12,
           face: 'Inter, sans-serif',
           strokeWidth: isDark ? 3 : 4,
-          strokeColor: isDark ? '#0F172A' : '#FFFFFF'
+          strokeColor: isDark ? '#0b1120' : '#ffffff'
         }
       });
     }
 
-    // Build Certificate Nodes (Milestone Gold #D97706 or Slate #475569)
     for (const cert of state.filteredCerts) {
       if (hideIsolated && !connectedCerts.has(cert.title)) continue;
       const isMilestone = embeddedCertTitles.has(cert.title);
@@ -1171,33 +1225,32 @@
       nodesArray.push({
         id: cert.title,
         label: truncateText(cert.title, 30),
-        title: `${cert.title}\nTier: Certificate (${cert.status})\nCourses: ${cert.coursesList.length} | Units: ${cert.totalUnits}`,
+        title: `${cert.title}\nDepartment: ${cert.primaryDiscipline}\nCourses: ${cert.coursesList.length} | Units: ${cert.totalUnits}`,
         shape: 'dot',
         size: sizeVal,
         color: isMilestone
           ? {
-              background: '#D97706',
-              border: '#FDE68A',
-              highlight: { background: '#F59E0B', border: '#FFFFFF' }
+              background: '#d97706',
+              border: '#fde68a',
+              highlight: { background: '#f59e0b', border: '#ffffff' }
             }
           : {
               background: '#475569',
-              border: '#CBD5E1',
-              highlight: { background: '#64748B', border: '#FFFFFF' }
+              border: '#cbd5e1',
+              highlight: { background: '#64748b', border: '#ffffff' }
             },
         font: {
-          color: isDark ? '#E2E8F0' : '#374151',
+          color: isDark ? '#e2e8f0' : '#334155',
           size: 11,
           face: 'Inter, sans-serif',
           strokeWidth: isDark ? 3 : 4,
-          strokeColor: isDark ? '#0F172A' : '#FFFFFF'
+          strokeColor: isDark ? '#0b1120' : '#ffffff'
         }
       });
     }
 
-    // Build Edges where overlap >= threshold
     for (const pair of state.allQualifyingPairs) {
-      const pct = pair.activeOverlapPct;
+      const pct = pair.stackableOverlapPct;
       const edgeWidth = Math.max(1.5, ((pct - 45) / 55) * 6.5);
 
       edgesArray.push({
@@ -1206,16 +1259,13 @@
         to: pair.degree.title,
         width: edgeWidth,
         label: `${pct.toFixed(0)}%`,
-        title: `${pair.cert.title} → ${pair.degree.title}\nOverlap: ${pct.toFixed(1)}% (${pair.sharedCount}/${pair.certCourseCount} courses)`,
+        title: `${pair.cert.title} → ${pair.degree.title}\nStackable Overlap: ${pct.toFixed(1)}% (${pair.sharedCount}/${pair.certCourseCount} courses)`,
         arrows: {
-          to: {
-            enabled: state.filters.metricMode === 'directional',
-            scaleFactor: 0.55
-          }
+          to: { enabled: true, scaleFactor: 0.55 }
         },
         color: {
           color: pair.isEmbeddedMilestone
-            ? '#D97706'
+            ? '#d97706'
             : isDark
             ? 'rgba(248, 113, 113, 0.65)'
             : 'rgba(153, 0, 0, 0.55)',
@@ -1223,7 +1273,7 @@
         },
         font: {
           size: 10,
-          color: isDark ? '#CBD5E1' : '#4B5563',
+          color: isDark ? '#cbd5e1' : '#475569',
           strokeWidth: 0,
           align: 'middle'
         }
@@ -1250,7 +1300,6 @@
       interaction: {
         hover: true,
         tooltipDelay: 120,
-        navigationButtons: false,
         keyboard: true
       }
     };
@@ -1263,11 +1312,9 @@
 
     state.networkInstance.on('click', function (params) {
       if (params.nodes && params.nodes.length > 0) {
-        const selectedNodeId = params.nodes[0];
-        renderNetworkNodeInspector(selectedNodeId);
+        renderNetworkNodeInspector(params.nodes[0]);
       } else if (params.edges && params.edges.length > 0) {
-        const edgeId = params.edges[0];
-        const pair = state.pairLookupMap.get(edgeId);
+        const pair = state.pairLookupMap.get(params.edges[0]);
         if (pair) {
           openPairComparisonModal(pair.degree.title, pair.cert.title);
         }
@@ -1285,10 +1332,9 @@
     dom.inspectorEmptyState.classList.add('hidden');
     dom.inspectorContent.classList.remove('hidden');
 
-    // Find all qualifying pairs connected to this program
     const connectedPairs = state.allQualifyingPairs
       .filter((p) => p.degree.title === programTitle || p.cert.title === programTitle)
-      .sort((a, b) => b.activeOverlapPct - a.activeOverlapPct);
+      .sort((a, b) => b.stackableOverlapPct - a.stackableOverlapPct);
 
     const neighborsHtml = connectedPairs.length
       ? connectedPairs
@@ -1301,9 +1347,9 @@
                 <div style="display:flex; justify-content:space-between; align-items:center; gap:0.5rem;">
                   <strong style="font-size:0.8rem;">${escapeHtml(otherProg.title)}</strong>
                   <span class="overlap-pct-badge ${getOverlapBadgeClass(
-                    pair.activeOverlapPct,
+                    pair.stackableOverlapPct,
                     pair.isEmbeddedMilestone
-                  )}">${pair.activeOverlapPct.toFixed(0)}%</span>
+                  )}">${pair.stackableOverlapPct.toFixed(0)}%</span>
                 </div>
                 <div style="font-size:0.73rem; color:var(--text-secondary); margin-top:0.25rem;">
                   ${pair.sharedCount}/${pair.certCourseCount} cert courses shared (${pair.sharedUnits} u) &bull; Click for Gap Checklist
@@ -1312,31 +1358,28 @@
             `;
           })
           .join('')
-      : `<div class="control-hint">No connected programs at ≥${state.filters.threshold}% threshold.</div>`;
+      : `<div class="accordion-hint">No connected programs at ≥${state.filters.threshold}% threshold.</div>`;
 
     dom.inspectorContent.innerHTML = `
       <div class="family-badges-row">
         <span class="tier-pill ${prog.tier === 'Degree' ? 'tier-degree' : 'tier-cert'}">${
       prog.tier
     }</span>
-        <span class="status-pill status-pill-${prog.status.replace(/\s+/g, '')}">${escapeHtml(
-      prog.status
-    )}</span>
+        <span class="discipline-tag">${escapeHtml(prog.primaryDiscipline)}</span>
       </div>
-      <h3 style="margin:0.3rem 0; font-size:1rem;">${escapeHtml(prog.title)}</h3>
-      <div style="font-size:0.77rem; color:var(--text-secondary); margin-bottom:0.75rem;">
+      <h3 style="margin:0.35rem 0; font-size:1rem;">${escapeHtml(prog.title)}</h3>
+      <div style="font-size:0.78rem; color:var(--text-secondary); margin-bottom:0.75rem;">
         <strong>${prog.coursesList.length}</strong> Unique Courses &bull;
-        <strong>${prog.totalUnits}</strong> Min Units &bull;
-        ${escapeHtml(prog.primaryDiscipline)}
+        <strong>${prog.totalUnits}</strong> Min Units
       </div>
-      <button type="button" class="btn btn-ghost btn-xs js-inspect-program" data-program="${escapeHtml(
+      <button type="button" class="btn btn-secondary btn-xs js-inspect-program" data-program="${escapeHtml(
         prog.title
-      )}" style="width:100%; margin-bottom:0.85rem;">
+      )}" style="width:100%; margin-bottom:0.9rem;">
         View Full Course List &amp; PLOs
       </button>
 
-      <div style="font-size:0.76rem; font-weight:700; text-transform:uppercase; color:var(--text-muted);">
-        Connected Pathways (${connectedPairs.length})
+      <div class="filter-label">
+        Connected Stackable Pathways (${connectedPairs.length})
       </div>
       <div class="inspector-neighbor-list">
         ${neighborsHtml}
@@ -1351,13 +1394,13 @@
   function getMatrixCellStyle(pct, isEmbedded) {
     if (!pct || pct <= 0) return '';
     if (isEmbedded || pct >= 99.95) {
-      return 'background-color: #D97706; color: #FFFFFF;';
+      return 'background-color: #d97706; color: #ffffff;';
     }
     if (pct >= 80) {
-      return 'background-color: #990000; color: #FFFFFF;';
+      return 'background-color: #990000; color: #ffffff;';
     }
     if (pct >= 50) {
-      return 'background-color: rgba(153, 0, 0, 0.48); color: #FFFFFF;';
+      return 'background-color: rgba(153, 0, 0, 0.48); color: #ffffff;';
     }
     const alpha = Math.max(0.08, (pct / 50) * 0.25).toFixed(2);
     return `background-color: rgba(153, 0, 0, ${alpha});`;
@@ -1378,9 +1421,7 @@
       degrees = Array.from(degSet).sort((a, b) => a.title.localeCompare(b.title));
       certs = Array.from(certSet).sort((a, b) => a.title.localeCompare(b.title));
     } else if (scope === 'top35') {
-      degrees = state.programFamilies
-        .slice(0, 35)
-        .map((f) => f.degree);
+      degrees = state.programFamilies.slice(0, 35).map((f) => f.degree);
       const certFreq = new Map();
       for (const pair of state.allQualifyingPairs) {
         certFreq.set(pair.cert, (certFreq.get(pair.cert) || 0) + 1);
@@ -1423,14 +1464,14 @@
             if (!pair || pair.sharedCount === 0) {
               return `<td class="matrix-cell matrix-cell-empty">&middot;</td>`;
             }
-            const pct = pair.activeOverlapPct;
+            const pct = pair.stackableOverlapPct;
             const style = getMatrixCellStyle(pct, pair.isEmbeddedMilestone);
             return `
               <td class="matrix-cell js-open-pair-modal"
                   style="${style}"
                   data-degree="${escapeHtml(d.title)}"
                   data-cert="${escapeHtml(c.title)}"
-                  title="${escapeHtml(d.title)} × ${escapeHtml(c.title)}&#10;Overlap: ${pct.toFixed(
+                  title="${escapeHtml(d.title)} × ${escapeHtml(c.title)}&#10;Stackable Overlap: ${pct.toFixed(
               1
             )}% (${pair.sharedCount}/${pair.certCourseCount} cert courses shared)">
                 ${pct.toFixed(0)}%
@@ -1468,7 +1509,7 @@
   }
 
   /* ------------------------------------------------------------------------
-   * 9. MODAL DIALOGS (PAIR COMPARISON & SINGLE PROGRAM PLO/COURSE INSPECTOR)
+   * 9. MODAL DIALOGS (PAIR COMPARISON & SINGLE PROGRAM INSPECTOR)
    * ------------------------------------------------------------------------ */
 
   function openPairComparisonModal(degreeTitle, certTitle) {
@@ -1494,28 +1535,28 @@
     dom.modalTitle.textContent = prog.title;
 
     const plosHtml = prog.plosList.length
-      ? `<ul style="margin:0.4rem 0 0; padding-left:1.25rem; font-size:0.8rem; color:var(--text-secondary);">
+      ? `<ul style="margin:0.4rem 0 0; padding-left:1.25rem; font-size:0.82rem; color:var(--text-secondary);">
           ${prog.plosList.map((plo) => `<li style="margin-bottom:0.35rem;">${escapeHtml(plo)}</li>`).join('')}
          </ul>`
-      : `<div class="control-hint">No Program Learning Outcomes listed in dataset.</div>`;
+      : `<div class="accordion-hint">No Program Learning Outcomes listed in dataset.</div>`;
 
     const coursesRowsHtml = prog.coursesList
       .map(
         (c) => `
         <tr>
-          <td style="padding:0.45rem 0.6rem; font-family:var(--font-mono); font-weight:700; border-bottom:1px solid var(--border-color);">${escapeHtml(
+          <td style="padding:0.5rem 0.65rem; font-family:var(--font-mono); font-weight:700; border-bottom:1px solid var(--border-light);">${escapeHtml(
             c.courseId
           )}</td>
-          <td style="padding:0.45rem 0.6rem; border-bottom:1px solid var(--border-color);">${escapeHtml(
+          <td style="padding:0.5rem 0.65rem; border-bottom:1px solid var(--border-light);">${escapeHtml(
             c.courseTitle
           )}</td>
-          <td style="padding:0.45rem 0.6rem; border-bottom:1px solid var(--border-color); font-size:0.75rem; color:var(--text-secondary);">${escapeHtml(
+          <td style="padding:0.5rem 0.65rem; border-bottom:1px solid var(--border-light); font-size:0.76rem; color:var(--text-secondary);">${escapeHtml(
             c.discipline
           )}</td>
-          <td style="padding:0.45rem 0.6rem; border-bottom:1px solid var(--border-color); font-size:0.74rem; color:var(--text-secondary);">${escapeHtml(
+          <td style="padding:0.5rem 0.65rem; border-bottom:1px solid var(--border-light); font-size:0.75rem; color:var(--text-secondary);">${escapeHtml(
             c.blockTitle
           )}</td>
-          <td style="padding:0.45rem 0.6rem; font-family:var(--font-mono); text-align:right; border-bottom:1px solid var(--border-color);">${
+          <td style="padding:0.5rem 0.65rem; font-family:var(--font-mono); text-align:right; border-bottom:1px solid var(--border-light);">${
             c.minUnits
           }</td>
         </tr>`
@@ -1526,9 +1567,9 @@
       <div style="display:flex; flex-direction:column; gap:1rem;">
         <div class="unit-tally-grid">
           <div class="tally-box tally-box-green">
-            <div class="tally-label">Lifecycle Status</div>
-            <div class="tally-val">${escapeHtml(prog.status)}</div>
-            <div class="tally-sub">Effective: ${escapeHtml(prog.implementationDate || 'N/A')}</div>
+            <div class="tally-label">Primary Department</div>
+            <div class="tally-val" style="font-size:1rem;">${escapeHtml(prog.primaryDiscipline)}</div>
+            <div class="tally-sub">Effective: ${escapeHtml(prog.implementationDate || 'Active')}</div>
           </div>
           <div class="tally-box tally-box-blue">
             <div class="tally-label">Unique Courses</div>
@@ -1538,7 +1579,7 @@
           <div class="tally-box tally-box-gold">
             <div class="tally-label">Total Minimum Units</div>
             <div class="tally-val">${prog.totalUnits} Units</div>
-            <div class="tally-sub">${escapeHtml(prog.primaryDiscipline)}</div>
+            <div class="tally-sub">Active Catalog Requirements</div>
           </div>
           <div class="tally-box tally-box-orange">
             <div class="tally-label">State / Local Codes</div>
@@ -1549,15 +1590,15 @@
 
         ${
           prog.description
-            ? `<div style="background:var(--bg-elevated); padding:0.85rem 1rem; border-radius:var(--radius-sm); border:1px solid var(--border-color); font-size:0.82rem; color:var(--text-secondary);">
+            ? `<div style="background:var(--bg-subtle); padding:0.9rem 1.1rem; border-radius:var(--radius-md); border:1px solid var(--border-light); font-size:0.83rem; color:var(--text-secondary);">
                  <strong style="color:var(--text-primary); display:block; margin-bottom:0.25rem;">Catalog Program Description</strong>
                  ${escapeHtml(prog.description)}
                </div>`
             : ''
         }
 
-        <div style="background:var(--bg-elevated); padding:0.85rem 1rem; border-radius:var(--radius-sm); border:1px solid var(--border-color);">
-          <strong style="font-size:0.84rem;">Program Learning Outcomes (${prog.plosList.length} Distinct PLOs)</strong>
+        <div style="background:var(--bg-subtle); padding:0.9rem 1.1rem; border-radius:var(--radius-md); border:1px solid var(--border-light);">
+          <strong style="font-size:0.85rem;">Program Learning Outcomes (${prog.plosList.length} Distinct PLOs)</strong>
           ${plosHtml}
         </div>
 
@@ -1565,15 +1606,15 @@
           <strong style="font-size:0.86rem; display:block; margin-bottom:0.5rem;">Deduplicated Course Requirements (${
             prog.coursesList.length
           })</strong>
-          <div style="max-height:340px; overflow-y:auto; border:1px solid var(--border-color); border-radius:var(--radius-sm);">
-            <table style="width:100%; border-collapse:collapse; font-size:0.79rem;">
-              <thead style="background:var(--bg-elevated); position:sticky; top:0;">
+          <div style="max-height:340px; overflow-y:auto; border:1px solid var(--border-light); border-radius:var(--radius-md);">
+            <table style="width:100%; border-collapse:collapse; font-size:0.8rem;">
+              <thead style="background:var(--bg-subtle); position:sticky; top:0;">
                 <tr>
-                  <th style="text-align:left; padding:0.5rem 0.6rem; border-bottom:1px solid var(--border-strong);">Course ID</th>
-                  <th style="text-align:left; padding:0.5rem 0.6rem; border-bottom:1px solid var(--border-strong);">Course Title</th>
-                  <th style="text-align:left; padding:0.5rem 0.6rem; border-bottom:1px solid var(--border-strong);">Discipline</th>
-                  <th style="text-align:left; padding:0.5rem 0.6rem; border-bottom:1px solid var(--border-strong);">Course Block</th>
-                  <th style="text-align:right; padding:0.5rem 0.6rem; border-bottom:1px solid var(--border-strong);">Min Units</th>
+                  <th style="text-align:left; padding:0.55rem 0.65rem; border-bottom:1px solid var(--border-medium);">Course ID</th>
+                  <th style="text-align:left; padding:0.55rem 0.65rem; border-bottom:1px solid var(--border-medium);">Course Title</th>
+                  <th style="text-align:left; padding:0.55rem 0.65rem; border-bottom:1px solid var(--border-medium);">Course Discipline</th>
+                  <th style="text-align:left; padding:0.55rem 0.65rem; border-bottom:1px solid var(--border-medium);">Course Block</th>
+                  <th style="text-align:right; padding:0.55rem 0.65rem; border-bottom:1px solid var(--border-medium);">Min Units</th>
                 </tr>
               </thead>
               <tbody>
@@ -1592,10 +1633,6 @@
    * 10. EXPORT FUNCTIONALITY (CSV CROSSWALK & EXECUTIVE PDF REPORT)
    * ------------------------------------------------------------------------ */
 
-  /**
-   * Generates and downloads a clean tabular CSV export of all filtered
-   * Degree-Certificate overlap pathways.
-   */
   function exportCrosswalkCsv() {
     const pairs = state.allQualifyingPairs;
     if (pairs.length === 0) {
@@ -1605,17 +1642,14 @@
 
     const headers = [
       'Degree Title',
-      'Degree Status',
       'Degree Primary Discipline',
       'Degree Total Courses',
       'Degree Total Min Units',
       'Certificate Title',
-      'Certificate Status',
       'Certificate Primary Discipline',
       'Certificate Total Courses',
       'Certificate Total Min Units',
-      'Overlap % (Cert Embedded in Degree)',
-      'Jaccard Bidirectional Similarity %',
+      'Stackable Overlap %',
       'Overlapping Units %',
       'Degree Completion Contribution %',
       'Shared Courses Count',
@@ -1637,17 +1671,14 @@
 
       const rowValues = [
         p.degree.title,
-        p.degree.status,
         p.degree.primaryDiscipline,
         p.degree.coursesList.length,
         p.degree.totalUnits,
         p.cert.title,
-        p.cert.status,
         p.cert.primaryDiscipline,
         p.cert.coursesList.length,
         p.cert.totalUnits,
         p.stackableOverlapPct.toFixed(2),
-        p.jaccardOverlapPct.toFixed(2),
         p.overlappingUnitsPct.toFixed(2),
         p.degreeContributionPct.toFixed(2),
         p.sharedCount,
@@ -1667,17 +1698,13 @@
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `Chaffey_Program_Overlap_Crosswalk_${state.filters.threshold}pct.csv`;
+    link.download = `Chaffey_Active_Program_Overlap_Crosswalk_${state.filters.threshold}pct.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   }
 
-  /**
-   * Generates a formatted Executive Summary PDF Report of the currently filtered
-   * Program Families and Stackable Pathways using html2pdf.js.
-   */
   function exportFamilyReportPdf() {
     const familiesWithCerts = state.programFamilies.filter((f) => f.qualifyingCerts.length > 0);
     if (familiesWithCerts.length === 0) {
@@ -1697,27 +1724,27 @@
           .map(
             (p) => `
             <tr>
-              <td style="padding:6px 8px; border-bottom:1px solid #E5E7EB; font-weight:600;">
+              <td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; font-weight:600;">
                 ${escapeHtml(p.cert.title)}
                 ${
                   p.isEmbeddedMilestone
-                    ? '<span style="color:#D97706; font-size:10px; font-weight:700;"> [100% MILESTONE]</span>'
+                    ? '<span style="color:#d97706; font-size:10px; font-weight:700;"> [100% MILESTONE]</span>'
                     : ''
                 }
               </td>
-              <td style="padding:6px 8px; border-bottom:1px solid #E5E7EB; text-align:center; font-weight:700; color:#990000;">
-                ${p.activeOverlapPct.toFixed(1)}%
+              <td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:center; font-weight:700; color:#990000;">
+                ${p.stackableOverlapPct.toFixed(1)}%
               </td>
-              <td style="padding:6px 8px; border-bottom:1px solid #E5E7EB; text-align:center;">
+              <td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:center;">
                 ${p.sharedCount} / ${p.certCourseCount} (${p.sharedUnits} u)
               </td>
-              <td style="padding:6px 8px; border-bottom:1px solid #E5E7EB; text-align:center;">
+              <td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; text-align:center;">
                 ${p.degreeContributionPct.toFixed(1)}%
               </td>
-              <td style="padding:6px 8px; border-bottom:1px solid #E5E7EB; font-size:11px; color:#4B5563;">
+              <td style="padding:6px 8px; border-bottom:1px solid #e5e7eb; font-size:11px; color:#4b5563;">
                 ${
                   p.certGapCourses.length === 0
-                    ? '<strong style="color:#059669;">0 extra courses needed</strong>'
+                    ? '<strong style="color:#16a34a;">0 extra courses needed</strong>'
                     : escapeHtml(p.certGapCourses.map((c) => c.courseId).join(', '))
                 }
               </td>
@@ -1731,7 +1758,7 @@
               <h3 style="margin:0; font-size:14px; color:#990000;">${escapeHtml(
                 fam.degree.title
               )}</h3>
-              <span style="font-size:11px; color:#4B5563;">
+              <span style="font-size:11px; color:#4b5563;">
                 ${fam.degree.coursesList.length} Courses &bull; ${
           fam.degree.totalUnits
         } Min Units &bull; ${escapeHtml(fam.degree.primaryDiscipline)}
@@ -1739,12 +1766,12 @@
             </div>
             <table style="width:100%; border-collapse:collapse; font-size:11.5px;">
               <thead>
-                <tr style="background:#F3F4F6; text-align:left;">
-                  <th style="padding:5px 8px; border-bottom:1px solid #D1D5DB;">Stackable Certificate</th>
-                  <th style="padding:5px 8px; border-bottom:1px solid #D1D5DB; text-align:center;">Overlap %</th>
-                  <th style="padding:5px 8px; border-bottom:1px solid #D1D5DB; text-align:center;">Shared Courses</th>
-                  <th style="padding:5px 8px; border-bottom:1px solid #D1D5DB; text-align:center;">Degree Contrib.</th>
-                  <th style="padding:5px 8px; border-bottom:1px solid #D1D5DB;">Remaining Cert Gap Courses</th>
+                <tr style="background:#f3f4f6; text-align:left;">
+                  <th style="padding:5px 8px; border-bottom:1px solid #d1d5db;">Stackable Certificate</th>
+                  <th style="padding:5px 8px; border-bottom:1px solid #d1d5db; text-align:center;">Overlap %</th>
+                  <th style="padding:5px 8px; border-bottom:1px solid #d1d5db; text-align:center;">Shared Courses</th>
+                  <th style="padding:5px 8px; border-bottom:1px solid #d1d5db; text-align:center;">Degree Contrib.</th>
+                  <th style="padding:5px 8px; border-bottom:1px solid #d1d5db;">Remaining Cert Gap Courses</th>
                 </tr>
               </thead>
               <tbody>
@@ -1763,37 +1790,35 @@
             Chaffey College &bull; Office of Institutional Research
           </div>
           <h1 style="margin:4px 0 0; font-size:20px; color:#111827;">
-            Stackable Program Families &amp; Curriculum Overlap Executive Report
+            Active Stackable Program Families &amp; Curriculum Overlap Report
           </h1>
         </div>
-        <div style="text-align:right; font-size:11px; color:#4B5563;">
+        <div style="text-align:right; font-size:11px; color:#4b5563;">
           <div>Generated: ${escapeHtml(dateStr)}</div>
-          <div>Threshold: &ge;${state.filters.threshold}% (${
-      state.filters.metricMode === 'jaccard' ? 'Jaccard' : 'Directional'
-    })</div>
-          <div>Statuses: ${escapeHtml(Array.from(state.filters.statuses).join(', '))}</div>
+          <div>Threshold: &ge;${state.filters.threshold}% Stackable Overlap</div>
+          <div>Status Scope: Active Programs Only</div>
         </div>
       </div>
 
       <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; margin-bottom:18px;">
-        <div style="padding:10px; background:#F9FAFB; border:1px solid #E5E7EB; border-radius:6px;">
-          <div style="font-size:10px; text-transform:uppercase; color:#6B7280; font-weight:700;">Program Families</div>
+        <div style="padding:10px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px;">
+          <div style="font-size:10px; text-transform:uppercase; color:#6b7280; font-weight:700;">Program Families</div>
           <div style="font-size:18px; font-weight:800; color:#990000;">${familiesWithCerts.length}</div>
         </div>
-        <div style="padding:10px; background:#F9FAFB; border:1px solid #E5E7EB; border-radius:6px;">
-          <div style="font-size:10px; text-transform:uppercase; color:#6B7280; font-weight:700;">Stackable Pathways</div>
+        <div style="padding:10px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px;">
+          <div style="font-size:10px; text-transform:uppercase; color:#6b7280; font-weight:700;">Stackable Pathways</div>
           <div style="font-size:18px; font-weight:800; color:#111827;">${
             state.allQualifyingPairs.length
           }</div>
         </div>
-        <div style="padding:10px; background:#F9FAFB; border:1px solid #E5E7EB; border-radius:6px;">
-          <div style="font-size:10px; text-transform:uppercase; color:#6B7280; font-weight:700;">100% Embedded Milestones</div>
-          <div style="font-size:18px; font-weight:800; color:#D97706;">${
+        <div style="padding:10px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px;">
+          <div style="font-size:10px; text-transform:uppercase; color:#6b7280; font-weight:700;">100% Embedded Milestones</div>
+          <div style="font-size:18px; font-weight:800; color:#d97706;">${
             state.allQualifyingPairs.filter((p) => p.isEmbeddedMilestone).length
           }</div>
         </div>
-        <div style="padding:10px; background:#F9FAFB; border:1px solid #E5E7EB; border-radius:6px;">
-          <div style="font-size:10px; text-transform:uppercase; color:#6B7280; font-weight:700;">Filtered Programs</div>
+        <div style="padding:10px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px;">
+          <div style="font-size:10px; text-transform:uppercase; color:#6b7280; font-weight:700;">Active Programs</div>
           <div style="font-size:18px; font-weight:800; color:#111827;">${
             state.filteredDegrees.length + state.filteredCerts.length
           }</div>
@@ -1810,7 +1835,7 @@
 
     const opt = {
       margin: [0.35, 0.35, 0.35, 0.35],
-      filename: `Chaffey_Program_Families_Report_${state.filters.threshold}pct.pdf`,
+      filename: `Chaffey_Active_Program_Families_Report_${state.filters.threshold}pct.pdf`,
       image: { type: 'jpeg', quality: 0.96 },
       html2canvas: { scale: 2, useCORS: true },
       jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' }
@@ -1820,55 +1845,7 @@
   }
 
   /* ------------------------------------------------------------------------
-   * 11. DISCIPLINE MULTI-SELECT DROPDOWN HELPERS
-   * ------------------------------------------------------------------------ */
-
-  function renderDisciplineDropdownOptions() {
-    const query = dom.disciplineSearchInput.value.trim().toLowerCase();
-    const listHtml = state.allDisciplines
-      .filter((d) => !query || d.toLowerCase().includes(query))
-      .map((disc) => {
-        const checked = state.filters.disciplines.has(disc) ? 'checked' : '';
-        return `
-          <label class="discipline-option-row">
-            <div class="discipline-option-left">
-              <input type="checkbox" class="js-discipline-check" value="${escapeHtml(
-                disc
-              )}" ${checked} />
-              <span title="${escapeHtml(disc)}">${escapeHtml(disc)}</span>
-            </div>
-          </label>
-        `;
-      })
-      .join('');
-
-    dom.disciplineOptionsList.innerHTML =
-      listHtml || `<div class="control-hint" style="padding:0.4rem;">No matching disciplines</div>`;
-
-    updateDisciplineSummaryLabel();
-  }
-
-  function updateDisciplineSummaryLabel() {
-    const selectedCount = state.filters.disciplines.size;
-    const totalCount = state.allDisciplines.length;
-
-    if (selectedCount === totalCount) {
-      dom.disciplineTriggerLabel.textContent = `All Disciplines (${totalCount})`;
-      dom.disciplineSelectionCount.textContent = 'All Selected';
-    } else if (selectedCount === 0) {
-      dom.disciplineTriggerLabel.textContent = 'No Disciplines Selected';
-      dom.disciplineSelectionCount.textContent = '0 Selected';
-    } else if (selectedCount === 1) {
-      dom.disciplineTriggerLabel.textContent = Array.from(state.filters.disciplines)[0];
-      dom.disciplineSelectionCount.textContent = `1 of ${totalCount}`;
-    } else {
-      dom.disciplineTriggerLabel.textContent = `${selectedCount} Disciplines Selected`;
-      dom.disciplineSelectionCount.textContent = `${selectedCount} of ${totalCount}`;
-    }
-  }
-
-  /* ------------------------------------------------------------------------
-   * 12. CSV INGESTION & INITIALIZATION
+   * 11. CSV INGESTION & INITIALIZATION
    * ------------------------------------------------------------------------ */
 
   function updateStatusIndicator(stateType, message) {
@@ -1887,13 +1864,11 @@
           updateStatusIndicator('error', 'CSV file contained no valid rows');
           return;
         }
-        indexRawDatasetMetadata(results.data);
+        ingestActiveProgramsFromCsv(results.data);
         runAnalysisPipeline();
         updateStatusIndicator(
           'ready',
-          `${sourceLabel} (${results.data.length.toLocaleString()} rows → ${
-            state.programsMap.size
-          } active programs)`
+          `${sourceLabel} (${state.programsMap.size} Active Programs)`
         );
       },
       error: function (err) {
@@ -1915,21 +1890,18 @@
         parseCsvText(csvText, 'Program Summary.csv');
       })
       .catch(() => {
-        updateStatusIndicator(
-          'error',
-          'Click "Load CSV" to select Program Summary.csv'
-        );
+        updateStatusIndicator('error', 'Click "Load CSV" to select Program Summary.csv');
         dom.familyCardsContainer.innerHTML = `
           <div class="empty-state-box">
             <h3>Load "Program Summary.csv" to Begin Analysis</h3>
-            <p>Your browser blocked automatic local file fetching (common when opening HTML directly via <code>file://</code>). Click the <strong>Load CSV</strong> button in the top navigation bar and select <strong>Program Summary.csv</strong>.</p>
+            <p>Your browser blocked automatic local file fetching (common when opening HTML directly via <code>file://</code>). Click the <strong>Load CSV</strong> button in the top header and select <strong>Program Summary.csv</strong>.</p>
           </div>
         `;
       });
   }
 
   /* ------------------------------------------------------------------------
-   * 13. EVENT LISTENERS & UI BINDINGS
+   * 12. EVENT LISTENERS & UI BINDINGS
    * ------------------------------------------------------------------------ */
 
   function truncateText(str, maxLen) {
@@ -1956,6 +1928,17 @@
       }
     });
 
+    // Collapsible Left Sidebar
+    dom.collapseSidebarBtn.addEventListener('click', () => {
+      dom.controlSidebar.classList.add('collapsed');
+      dom.expandSidebarBtn.classList.remove('hidden');
+    });
+
+    dom.expandSidebarBtn.addEventListener('click', () => {
+      dom.controlSidebar.classList.remove('collapsed');
+      dom.expandSidebarBtn.classList.add('hidden');
+    });
+
     // CSV File Input Upload
     dom.csvFileInput.addEventListener('change', (e) => {
       const file = e.target.files && e.target.files[0];
@@ -1973,7 +1956,7 @@
     dom.exportCsvBtn.addEventListener('click', exportCrosswalkCsv);
     dom.exportPdfBtn.addEventListener('click', exportFamilyReportPdf);
 
-    // Search Input (with fast debounce)
+    // Keyword Search Input
     let searchTimeout = null;
     dom.searchInput.addEventListener('input', () => {
       const val = dom.searchInput.value;
@@ -1992,7 +1975,7 @@
       runAnalysisPipeline();
     });
 
-    // Threshold Slider & Preset Pills
+    // Threshold Slider & Preset Chips
     dom.thresholdSlider.addEventListener('input', () => {
       const val = parseInt(dom.thresholdSlider.value, 10);
       dom.thresholdValueDisplay.textContent = `${val}%`;
@@ -2012,92 +1995,75 @@
       });
     });
 
-    // Stackability Direction Toggle
-    function setMetricMode(mode) {
-      state.filters.metricMode = mode;
-      dom.metricDirectionalBtn.classList.toggle('active', mode === 'directional');
-      dom.metricJaccardBtn.classList.toggle('active', mode === 'jaccard');
-
-      if (mode === 'directional') {
-        dom.formulaCallout.innerHTML = `
-          <code>Overlap % = |S<sub>D</sub> &cap; S<sub>C</sub>| / |S<sub>C</sub>| &times; 100</code>
-          <span>Measures how much of Certificate C is embedded inside Degree D.</span>
-        `;
-      } else {
-        dom.formulaCallout.innerHTML = `
-          <code>Jaccard % = |S<sub>D</sub> &cap; S<sub>C</sub>| / |S<sub>D</sub> &cup; S<sub>C</sub>| &times; 100</code>
-          <span>Symmetric bidirectional course similarity across both programs.</span>
-        `;
-      }
-      runAnalysisPipeline();
-    }
-
-    dom.metricDirectionalBtn.addEventListener('click', () => setMetricMode('directional'));
-    dom.metricJaccardBtn.addEventListener('click', () => setMetricMode('jaccard'));
-
-    // Lifecycle Status Checkboxes
-    dom.statusCheckboxes.forEach((cb) => {
-      cb.addEventListener('change', () => {
-        const nextStatuses = new Set();
-        dom.statusCheckboxes.forEach((box) => {
-          if (box.checked) nextStatuses.add(box.value);
-        });
-        // Prevent unchecking all statuses
-        if (nextStatuses.size === 0) {
-          cb.checked = true;
-          nextStatuses.add(cb.value);
-        }
-        state.filters.statuses = nextStatuses;
-        runAnalysisPipeline();
-      });
+    // Accordion Open/Collapse Toggles
+    dom.disciplineAccordionBtn.addEventListener('click', () => {
+      dom.disciplineAccordion.classList.toggle('open');
     });
 
-    dom.statusActiveOnlyBtn.addEventListener('click', () => {
-      state.filters.statuses = new Set(['Active']);
-      dom.statusCheckboxes.forEach((box) => {
-        box.checked = box.value === 'Active';
-      });
-      runAnalysisPipeline();
+    dom.programTitleAccordionBtn.addEventListener('click', () => {
+      dom.programTitleAccordion.classList.toggle('open');
     });
 
-    // Discipline Dropdown Menu
-    dom.disciplineDropdownBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const isHidden = dom.disciplineDropdownMenu.classList.toggle('hidden');
-      dom.disciplineDropdownBtn.setAttribute('aria-expanded', String(!isHidden));
-    });
-
-    document.addEventListener('click', (e) => {
-      if (!dom.disciplineDropdown.contains(e.target)) {
-        dom.disciplineDropdownMenu.classList.add('hidden');
-        dom.disciplineDropdownBtn.setAttribute('aria-expanded', 'false');
-      }
-    });
-
-    dom.disciplineSearchInput.addEventListener('input', renderDisciplineDropdownOptions);
+    // Discipline / Department Filter Events
+    dom.disciplineSearchInput.addEventListener('input', renderDisciplineFilterList);
 
     dom.disciplineOptionsList.addEventListener('change', (e) => {
       if (e.target.classList.contains('js-discipline-check')) {
         const disc = e.target.value;
         if (e.target.checked) {
-          state.filters.disciplines.add(disc);
+          state.filters.selectedDisciplines.add(disc);
         } else {
-          state.filters.disciplines.delete(disc);
+          state.filters.selectedDisciplines.delete(disc);
         }
-        updateDisciplineSummaryLabel();
+        state.expandedFamilies.clear();
+        renderDisciplineFilterList();
+        renderProgramTitleFilterList();
         runAnalysisPipeline();
       }
     });
 
-    dom.selectAllDisciplinesBtn.addEventListener('click', () => {
-      state.filters.disciplines = new Set(state.allDisciplines);
-      renderDisciplineDropdownOptions();
+    dom.clearDisciplinesBtn.addEventListener('click', () => {
+      state.filters.selectedDisciplines.clear();
+      dom.disciplineSearchInput.value = '';
+      state.expandedFamilies.clear();
+      renderDisciplineFilterList();
+      renderProgramTitleFilterList();
       runAnalysisPipeline();
     });
 
-    dom.clearAllDisciplinesBtn.addEventListener('click', () => {
-      state.filters.disciplines.clear();
-      renderDisciplineDropdownOptions();
+    // Program Titles Filter Events
+    dom.tierMiniBtns.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const tier = btn.getAttribute('data-tier');
+        state.filters.programListTierFilter = tier;
+        dom.tierMiniBtns.forEach((b) =>
+          b.classList.toggle('active', b.getAttribute('data-tier') === tier)
+        );
+        renderProgramTitleFilterList();
+      });
+    });
+
+    dom.programTitleSearchInput.addEventListener('input', renderProgramTitleFilterList);
+
+    dom.programTitleOptionsList.addEventListener('change', (e) => {
+      if (e.target.classList.contains('js-program-title-check')) {
+        const title = e.target.value;
+        if (e.target.checked) {
+          state.filters.selectedProgramTitles.add(title);
+        } else {
+          state.filters.selectedProgramTitles.delete(title);
+        }
+        state.expandedFamilies.clear();
+        renderProgramTitleFilterList();
+        runAnalysisPipeline();
+      }
+    });
+
+    dom.clearProgramTitlesBtn.addEventListener('click', () => {
+      state.filters.selectedProgramTitles.clear();
+      dom.programTitleSearchInput.value = '';
+      state.expandedFamilies.clear();
+      renderProgramTitleFilterList();
       runAnalysisPipeline();
     });
 
@@ -2114,6 +2080,8 @@
 
     dom.excludeGeToggle.addEventListener('change', () => {
       state.filters.excludeGe = dom.excludeGeToggle.checked;
+      renderDisciplineFilterList();
+      renderProgramTitleFilterList();
       runAnalysisPipeline();
     });
 
@@ -2121,26 +2089,31 @@
     dom.resetFiltersBtn.addEventListener('click', () => {
       state.filters.searchQuery = '';
       state.filters.threshold = 80;
-      state.filters.metricMode = 'directional';
-      state.filters.statuses = new Set(['Active']);
-      state.filters.disciplines = new Set(state.allDisciplines);
+      state.filters.selectedDisciplines.clear();
+      state.filters.selectedProgramTitles.clear();
+      state.filters.programListTierFilter = 'all';
       state.filters.sortBy = 'certCount';
       state.filters.onlyWithCerts = true;
-      state.filters.excludeGe = false;
+      state.filters.excludeGe = true;
 
       dom.searchInput.value = '';
       dom.clearSearchBtn.classList.add('hidden');
+      dom.disciplineSearchInput.value = '';
+      dom.programTitleSearchInput.value = '';
       dom.thresholdSlider.value = 80;
       dom.thresholdValueDisplay.textContent = '80%';
       syncPresetPills(80);
-      dom.statusCheckboxes.forEach((box) => {
-        box.checked = box.value === 'Active';
-      });
+      dom.tierMiniBtns.forEach((b) =>
+        b.classList.toggle('active', b.getAttribute('data-tier') === 'all')
+      );
       dom.sortBySelect.value = 'certCount';
       dom.onlyWithCertsToggle.checked = true;
-      dom.excludeGeToggle.checked = false;
-      renderDisciplineDropdownOptions();
-      setMetricMode('directional');
+      dom.excludeGeToggle.checked = true;
+
+      state.expandedFamilies.clear();
+      renderDisciplineFilterList();
+      renderProgramTitleFilterList();
+      runAnalysisPipeline();
     });
 
     // View Mode Switcher Tabs
@@ -2294,7 +2267,7 @@
   }
 
   /* ------------------------------------------------------------------------
-   * 14. BOOTSTRAP ON DOM CONTENT LOADED
+   * 13. BOOTSTRAP ON DOM CONTENT LOADED
    * ------------------------------------------------------------------------ */
   document.addEventListener('DOMContentLoaded', () => {
     const savedTheme = localStorage.getItem('chaffey_overlap_theme');
