@@ -930,6 +930,116 @@
       .replace(/'/g, '&#39;');
   }
 
+  /**
+   * Sanitizes and formats catalog program descriptions.
+   * Cleans Microsoft Word / CMS artifacts, removes empty tags, decodes entities,
+   * strips inline styling/scripts, and safely preserves semantic HTML paragraphs
+   * and lists instead of displaying escaped <p> </p> literal text.
+   */
+  function formatCatalogDescription(raw) {
+    if (!raw || typeof raw !== 'string') return '';
+
+    const trimmed = raw.trim();
+    if (!trimmed) return '';
+
+    // Check if the input contains HTML tags
+    const hasHtmlTags = /<[a-z][\s\S]*>/i.test(trimmed);
+
+    if (!hasHtmlTags) {
+      // Plain text: escape HTML and split into paragraphs
+      const paragraphs = trimmed
+        .split(/\r?\n\s*\r?\n+/)
+        .map((p) => p.trim())
+        .filter(Boolean);
+
+      if (paragraphs.length > 1) {
+        return paragraphs
+          .map((p) => `<p>${escapeHtml(p).replace(/\r?\n/g, '<br>')}</p>`)
+          .join('');
+      }
+      return `<p>${escapeHtml(trimmed).replace(/\r?\n/g, '<br>')}</p>`;
+    }
+
+    try {
+      const parser = new DOMParser();
+      // Clean non-breaking spaces before parsing
+      const preCleaned = trimmed
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/\u00a0/g, ' ');
+
+      const doc = parser.parseFromString(preCleaned, 'text/html');
+
+      // Strip dangerous or non-content tags completely
+      const forbiddenTags = ['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta'];
+      forbiddenTags.forEach((tag) => {
+        doc.body.querySelectorAll(tag).forEach((el) => el.remove());
+      });
+
+      // Unwrap styling wrappers like span, font, and div while keeping their text content
+      doc.body.querySelectorAll('span, font, div').forEach((el) => {
+        while (el.firstChild) {
+          el.parentNode.insertBefore(el.firstChild, el);
+        }
+        el.remove();
+      });
+
+      // Allowed safe semantic tags
+      const allowedTags = new Set([
+        'P', 'BR', 'STRONG', 'B', 'EM', 'I', 'U', 'UL', 'OL', 'LI', 'A', 'H3', 'H4', 'H5', 'H6'
+      ]);
+
+      const allElements = Array.from(doc.body.querySelectorAll('*'));
+      allElements.forEach((el) => {
+        if (!allowedTags.has(el.tagName)) {
+          // Unwrap disallowed element but keep children
+          while (el.firstChild) {
+            el.parentNode.insertBefore(el.firstChild, el);
+          }
+          el.remove();
+        } else {
+          // Strip inline styles, classes, and event attributes
+          const attrs = Array.from(el.attributes);
+          for (const attr of attrs) {
+            const attrName = attr.name.toLowerCase();
+            if (el.tagName === 'A' && attrName === 'href') {
+              const href = (el.getAttribute('href') || '').trim();
+              if (!/^https?:\/\//i.test(href) && !/^mailto:/i.test(href)) {
+                el.removeAttribute('href');
+              } else {
+                el.setAttribute('target', '_blank');
+                el.setAttribute('rel', 'noopener noreferrer');
+              }
+            } else {
+              el.removeAttribute(attr.name);
+            }
+          }
+        }
+      });
+
+      // Remove empty paragraphs and empty lists
+      doc.body.querySelectorAll('p, ol, ul').forEach((el) => {
+        const text = el.textContent.replace(/[\s\u00a0]+/g, ' ').trim();
+        if (!text && !el.querySelector('br, a, img')) {
+          el.remove();
+        }
+      });
+
+      let result = doc.body.innerHTML.trim();
+      if (!result) return '';
+
+      // If the result doesn't start with a block container, wrap in <p>
+      if (!/^<(p|ul|ol|h[1-6])/i.test(result)) {
+        result = `<p>${result}</p>`;
+      }
+
+      return result;
+    } catch (e) {
+      // Fallback: strip tags safely and format as plain paragraphs
+      const textOnly = trimmed.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      return `<p>${escapeHtml(textOnly)}</p>`;
+    }
+  }
+
   function buildCourseGapChecklistHtml(pair, isModal) {
     const {
       degree,
@@ -1649,9 +1759,11 @@
 
         ${
           prog.description
-            ? `<div style="background:var(--bg-subtle); padding:0.9rem 1.1rem; border-radius:var(--radius-md); border:1px solid var(--border-light); font-size:0.83rem; color:var(--text-secondary);">
-                 <strong style="color:var(--text-primary); display:block; margin-bottom:0.25rem;">Catalog Program Description</strong>
-                 ${escapeHtml(prog.description)}
+            ? `<div class="catalog-desc-container">
+                 <strong class="catalog-desc-title">Catalog Program Description</strong>
+                 <div class="catalog-desc-body">
+                   ${formatCatalogDescription(prog.description)}
+                 </div>
                </div>`
             : ''
         }
