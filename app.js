@@ -37,7 +37,7 @@
     // User Filter & Control State
     filters: {
       searchQuery: '',                // Matches course IDs, course titles, or keywords
-      threshold: 80,                  // Default: 80% directional stackable overlap
+      threshold: 100,                 // Default: 100% directional stackable overlap
       selectedDisciplines: new Set(), // Empty Set = All Disciplines shown
       selectedProgramTitles: new Set(), // Empty Set = All Program Titles shown
       programListTierFilter: 'all',   // 'all' | 'Degree' | 'Certificate' (for sidebar list)
@@ -47,6 +47,10 @@
       matrixScope: 'matching',        // 'matching' | 'top35' | 'all'
       networkHideIsolated: true
     },
+
+    // Context-Aware Filter Option Sets (recomputed at active threshold)
+    relevantDisciplineStats: [],      // [{ name, count, degreeCount, certCount }] meeting threshold
+    relevantProgramsForList: [],      // Array of Program objects meeting threshold & discipline scope
 
     // Filtered Analytical Outputs
     filteredDegrees: [],
@@ -393,9 +397,6 @@
     state.primaryDisciplines = Array.from(primaryDiscStats.values()).sort((a, b) =>
       a.name.localeCompare(b.name)
     );
-
-    renderDisciplineFilterList();
-    renderProgramTitleFilterList();
   }
 
   /* ------------------------------------------------------------------------
@@ -482,13 +483,79 @@
 
   /**
    * Runs the full analytical pipeline with Discipline, Program Title, Threshold,
-   * and Keyword filters.
+   * and Keyword filters, and dynamically scopes the Discipline & Program Titles
+   * filter lists so only options relevant to the current threshold are shown.
    */
   function runAnalysisPipeline() {
     const searchLower = state.filters.searchQuery.trim().toLowerCase();
     const threshold = state.filters.threshold;
     const selectedDiscs = state.filters.selectedDisciplines;
     const selectedTitles = state.filters.selectedProgramTitles;
+
+    // 1. Separate all active programs (respecting GE exclusion)
+    const allActiveDegrees = [];
+    const allActiveCerts = [];
+    for (const prog of state.programsMap.values()) {
+      if (state.filters.excludeGe && prog.isGeBreadth) continue;
+      if (prog.tier === 'Degree') allActiveDegrees.push(prog);
+      else allActiveCerts.push(prog);
+    }
+
+    // 2. Compute threshold-relevant Disciplines & Program Titles so sidebar filters
+    //    only display Degrees, Certificates, and Disciplines that meet the active threshold!
+    const relevantDiscMap = new Map();
+    const relevantProgramsForListSet = new Map();
+
+    for (const deg of allActiveDegrees) {
+      const matchingCertsForDeg = [];
+      for (const cert of allActiveCerts) {
+        const pair = computePairOverlap(deg, cert);
+        if (pair.stackableOverlapPct >= threshold) {
+          matchingCertsForDeg.push(cert);
+        }
+      }
+
+      const degQualifiesAtThreshold =
+        matchingCertsForDeg.length > 0 || !state.filters.onlyWithCerts;
+
+      if (degQualifiesAtThreshold) {
+        // Record this Degree's primary discipline as relevant at the current threshold
+        if (!relevantDiscMap.has(deg.primaryDiscipline)) {
+          relevantDiscMap.set(deg.primaryDiscipline, {
+            name: deg.primaryDiscipline,
+            degreeSet: new Set(),
+            certSet: new Set()
+          });
+        }
+        const discEntry = relevantDiscMap.get(deg.primaryDiscipline);
+        discEntry.degreeSet.add(deg.title);
+        for (const c of matchingCertsForDeg) {
+          discEntry.certSet.add(c.title);
+        }
+
+        // If this Degree also passes the currently selected Discipline filter,
+        // include this Degree and its threshold-qualifying Certificates in the Program Titles filter list
+        if (selectedDiscs.size === 0 || selectedDiscs.has(deg.primaryDiscipline)) {
+          relevantProgramsForListSet.set(deg.title, deg);
+          for (const c of matchingCertsForDeg) {
+            relevantProgramsForListSet.set(c.title, c);
+          }
+        }
+      }
+    }
+
+    state.relevantDisciplineStats = Array.from(relevantDiscMap.values())
+      .map((entry) => ({
+        name: entry.name,
+        degreeCount: entry.degreeSet.size,
+        certCount: entry.certSet.size,
+        count: entry.degreeSet.size + entry.certSet.size
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    state.relevantProgramsForList = Array.from(relevantProgramsForListSet.values()).sort((a, b) =>
+      a.title.localeCompare(b.title)
+    );
 
     // Determine if the user selected specific Degree titles vs Certificate titles
     const selectedDegreeTitles = new Set();
@@ -500,26 +567,15 @@
       else selectedCertTitles.add(t);
     }
 
-    const candidateDegrees = [];
-    const allActiveCerts = [];
-
-    for (const prog of state.programsMap.values()) {
-      if (state.filters.excludeGe && prog.isGeBreadth) continue;
-
-      if (prog.tier === 'Degree') {
-        // Filter Degrees by Primary Discipline (if any discipline is selected)
-        if (selectedDiscs.size > 0 && !selectedDiscs.has(prog.primaryDiscipline)) {
-          continue;
-        }
-        // If specific Degree titles are checked, restrict to those Degrees
-        if (selectedDegreeTitles.size > 0 && !selectedDegreeTitles.has(prog.title)) {
-          continue;
-        }
-        candidateDegrees.push(prog);
-      } else {
-        allActiveCerts.push(prog);
+    const candidateDegrees = allActiveDegrees.filter((prog) => {
+      if (selectedDiscs.size > 0 && !selectedDiscs.has(prog.primaryDiscipline)) {
+        return false;
       }
-    }
+      if (selectedDegreeTitles.size > 0 && !selectedDegreeTitles.has(prog.title)) {
+        return false;
+      }
+      return true;
+    });
 
     const pairLookupMap = new Map();
     const allQualifyingPairs = [];
@@ -532,8 +588,6 @@
       const qualifyingCerts = [];
 
       for (const cert of allActiveCerts) {
-        // If the user explicitly selected specific Certificate titles in Program Titles,
-        // only evaluate those certificates!
         if (selectedCertTitles.size > 0 && !selectedCertTitles.has(cert.title)) {
           continue;
         }
@@ -564,8 +618,6 @@
         return b.sharedUnits - a.sharedUnits;
       });
 
-      // If user explicitly checked a Degree Title or unchecked "Only Degrees with >=1 cert",
-      // show the Degree card even if 0 certs meet the threshold
       const forceShowDegree =
         selectedDegreeTitles.has(degree.title) || !state.filters.onlyWithCerts;
 
@@ -582,15 +634,6 @@
         });
         includedDegreesMap.set(degree.title, degree);
       }
-    }
-
-    // Also include certificates that match the active Discipline & Program Title filters
-    for (const cert of allActiveCerts) {
-      if (selectedDiscs.size > 0 && !selectedDiscs.has(cert.primaryDiscipline)) continue;
-      if (selectedCertTitles.size > 0 && !selectedCertTitles.has(cert.title)) continue;
-      if (selectedDegreeTitles.size > 0 && selectedCertTitles.size === 0) continue;
-      if (!matchesKeywordSearch(cert, searchLower)) continue;
-      includedCertsMap.set(cert.title, cert);
     }
 
     // Sort Program Families
@@ -634,6 +677,8 @@
       }
     }
 
+    renderDisciplineFilterList();
+    renderProgramTitleFilterList();
     updateKpisAndFilterBadges();
     renderActiveView();
   }
@@ -726,7 +771,7 @@
       (discCount > 0 ? 1 : 0) +
       (titleCount > 0 ? 1 : 0) +
       (state.filters.searchQuery.trim() ? 1 : 0) +
-      (state.filters.threshold !== 80 ? 1 : 0);
+      (state.filters.threshold !== 100 ? 1 : 0);
 
     dom.activeFiltersBadge.textContent =
       activeFilterCount > 0 ? `${activeFilterCount} Active Filter(s)` : 'Default Scope';
@@ -740,7 +785,8 @@
 
   /**
    * Renders the Discipline / Department checkbox list in the sidebar.
-   * Clicking any discipline immediately filters to that primary department.
+   * Only shows disciplines that have qualifying programs at the current threshold
+   * (plus any currently checked discipline).
    */
   function renderDisciplineFilterList() {
     const query = dom.disciplineSearchInput.value.trim().toLowerCase();
@@ -754,7 +800,22 @@
       dom.disciplineBadge.classList.add('active');
     }
 
-    const rowsHtml = state.primaryDisciplines
+    // Merge threshold-relevant disciplines with any currently checked discipline
+    const discMap = new Map();
+    for (const d of state.relevantDisciplineStats) {
+      discMap.set(d.name, d);
+    }
+    for (const checkedName of selected) {
+      if (!discMap.has(checkedName)) {
+        discMap.set(checkedName, { name: checkedName, degreeCount: 0, certCount: 0, count: 0 });
+      }
+    }
+
+    const sortedDiscs = Array.from(discMap.values()).sort((a, b) =>
+      a.name.localeCompare(b.name)
+    );
+
+    const rowsHtml = sortedDiscs
       .filter((d) => {
         if (state.filters.excludeGe && d.name === 'General Education / Transfer Breadth') {
           return false;
@@ -770,7 +831,7 @@
         } />
             <span class="checkbox-text" title="${escapeHtml(d.name)} (${d.degreeCount} Deg, ${
           d.certCount
-        } Cert)">${escapeHtml(d.name)}</span>
+        } Cert at ≥${state.filters.threshold}%)">${escapeHtml(d.name)}</span>
             <span class="checkbox-count">${d.count}</span>
           </label>
         `;
@@ -778,18 +839,17 @@
       .join('');
 
     dom.disciplineOptionsList.innerHTML =
-      rowsHtml || `<div class="accordion-hint">No matching disciplines found.</div>`;
+      rowsHtml || `<div class="accordion-hint">No disciplines at &ge;${state.filters.threshold}% overlap.</div>`;
   }
 
   /**
    * Renders the Program Titles checkbox list in the sidebar.
-   * Dynamically respects the active Discipline filter and Tier mini-tabs
-   * ('All' | 'Degrees' | 'Certificates') so users can easily pick specific programs.
+   * Only shows Degrees and Certificates that meet the current overlap threshold
+   * and active Discipline filter (plus any already-checked titles).
    */
   function renderProgramTitleFilterList() {
     const query = dom.programTitleSearchInput.value.trim().toLowerCase();
     const tierFilter = state.filters.programListTierFilter;
-    const selectedDiscs = state.filters.selectedDisciplines;
     const selectedTitles = state.filters.selectedProgramTitles;
 
     if (selectedTitles.size === 0) {
@@ -800,19 +860,29 @@
       dom.programTitleBadge.classList.add('active');
     }
 
-    const matchingPrograms = Array.from(state.programsMap.values())
+    // Start from threshold-relevant programs (already scoped to selectedDisciplines)
+    // and ensure any currently checked program remains visible so it can be unchecked
+    const progCandidateMap = new Map();
+    for (const p of state.relevantProgramsForList) {
+      progCandidateMap.set(p.title, p);
+    }
+    for (const checkedTitle of selectedTitles) {
+      const p = state.programsMap.get(checkedTitle);
+      if (p && !progCandidateMap.has(checkedTitle)) {
+        progCandidateMap.set(checkedTitle, p);
+      }
+    }
+
+    const matchingPrograms = Array.from(progCandidateMap.values())
       .filter((p) => {
-        if (state.filters.excludeGe && p.isGeBreadth) return false;
-        // Keep already-checked titles visible even if discipline changes
         if (selectedTitles.has(p.title)) return true;
-        if (selectedDiscs.size > 0 && !selectedDiscs.has(p.primaryDiscipline)) return false;
         if (tierFilter !== 'all' && p.tier !== tierFilter) return false;
         if (query && !p.title.toLowerCase().includes(query)) return false;
         return true;
       })
       .sort((a, b) => a.title.localeCompare(b.title));
 
-    dom.programListCountHint.textContent = `${matchingPrograms.length} active program(s) listed`;
+    dom.programListCountHint.textContent = `${matchingPrograms.length} qualifying program(s) at ≥${state.filters.threshold}%`;
 
     const rowsHtml = matchingPrograms
       .map((p) => {
@@ -833,7 +903,7 @@
       .join('');
 
     dom.programTitleOptionsList.innerHTML =
-      rowsHtml || `<div class="accordion-hint">No matching programs found.</div>`;
+      rowsHtml || `<div class="accordion-hint">No matching programs at &ge;${state.filters.threshold}% overlap.</div>`;
   }
 
   /* ------------------------------------------------------------------------
@@ -2088,7 +2158,7 @@
     // Reset All Filters
     dom.resetFiltersBtn.addEventListener('click', () => {
       state.filters.searchQuery = '';
-      state.filters.threshold = 80;
+      state.filters.threshold = 100;
       state.filters.selectedDisciplines.clear();
       state.filters.selectedProgramTitles.clear();
       state.filters.programListTierFilter = 'all';
@@ -2100,9 +2170,9 @@
       dom.clearSearchBtn.classList.add('hidden');
       dom.disciplineSearchInput.value = '';
       dom.programTitleSearchInput.value = '';
-      dom.thresholdSlider.value = 80;
-      dom.thresholdValueDisplay.textContent = '80%';
-      syncPresetPills(80);
+      dom.thresholdSlider.value = 100;
+      dom.thresholdValueDisplay.textContent = '100%';
+      syncPresetPills(100);
       dom.tierMiniBtns.forEach((b) =>
         b.classList.toggle('active', b.getAttribute('data-tier') === 'all')
       );
@@ -2111,8 +2181,6 @@
       dom.excludeGeToggle.checked = true;
 
       state.expandedFamilies.clear();
-      renderDisciplineFilterList();
-      renderProgramTitleFilterList();
       runAnalysisPipeline();
     });
 
