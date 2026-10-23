@@ -1,30 +1,82 @@
-# AI Assistant Context & Prompt files
+# ==============================================================================
+# Git Ignore - Chaffey College Plan Metrics Dashboard
+# ==============================================================================
+
+# --- Secrets, Credentials & Environment Files ---
+.env
+.env.*
+*.env
+*.local
+*.key
+*.pem
+*.cer
+*.crt
+*.pfx
+*.p12
+*.token
+*token*
+credentials.json
+client_secrets.json
+
+# --- AI Assistant Context & Prompt Files ---
 GEMINI.md
 .gemini/
 .antigravity/
 
-# Reference assets (non-production)
+# --- Temporary Office Lock Files (Excel / Word / PowerPoint) ---
+~$*.xlsx
+~$*.xls
+~$*.xlsm
+~$*.csv
+~$*.docx
+~$*.doc
+~$*.pptx
+
+# --- Operating System Files ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Thumbs.db:encryptable
+Desktop.ini
+[Dd]esktop.ini
+
+# --- IDE & Editor Configurations ---
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+
+# --- Python & Automation Artifacts ---
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# --- Local Scripts, Reference & Scratch Workspaces ---
+scratch/
+sync_github*.py
+*audit*.py
+*test*.py
 example 1_styles.css
 example 2_styles.css
 
-# Environment and local secret files
-.env
-.env.*
-*.local
-*.pem
-*.key
-
-# Operating System metadata
-Thumbs.db
-[Dd]esktop.ini
-.DS_Store
-
-# Logs & temporary files
+# --- Logs & Runtime Dumps ---
 *.log
 *.tmp
-__pycache__/
-*.py[cod]
-
-# Editor & IDE configurations
-.vscode/
-.idea/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
