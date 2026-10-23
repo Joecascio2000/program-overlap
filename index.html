@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Chaffey College | Curriculum Overlap &amp; Stackable Program Family Explorer</title>
-  <meta name="description" content="Higher Education Institutional Research tool for analyzing course overlaps, stackable certificates, and Associate Degree completion pathways at Chaffey College." />
+  <title>Chaffey College | Curriculum Overlap &amp; Stackable Pathway Explorer</title>
+  <meta name="description" content="Higher Education Institutional Research tool for analyzing active course overlaps, stackable certificates, and Associate Degree completion pathways at Chaffey College." />
 
-  <!-- Google Fonts: Inter -->
+  <!-- Google Fonts: Inter, Outfit & JetBrains Mono (Matching Chaffey Dashboard Design Language) -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Outfit:wght@600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
 
   <!-- PapaParse CDN for fast client-side CSV parsing -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
@@ -24,312 +24,360 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <!-- Top Institutional Navigation Header -->
-  <header class="app-header">
-    <div class="header-brand">
-      <div class="brand-crest" aria-hidden="true">
-        <span class="crest-letter">C</span>
-      </div>
-      <div class="brand-titles">
-        <div class="brand-eyebrow">Chaffey College &bull; Institutional Research &amp; Curriculum Analytics</div>
-        <h1 class="brand-title">Program Overlap &amp; Stackable Pathway Explorer</h1>
-      </div>
-    </div>
-
-    <div class="header-actions">
-      <!-- Dataset Status & Upload Fallback -->
-      <div class="data-status-pill" id="dataStatusPill" title="Deduplicated by Program + Subject + Course Number">
-        <span class="status-dot loading" id="dataStatusDot"></span>
-        <span id="dataStatusText">Loading Program Summary.csv...</span>
+  <!-- Top Institutional Header (Matches example 1 & example 2 Chaffey Header) -->
+  <header class="chaffey-header">
+    <div class="header-container">
+      <div class="brand-group">
+        <div class="brand-crest" aria-hidden="true">C</div>
+        <div class="brand-titles">
+          <div class="brand-eyebrow">Chaffey College &bull; Institutional Research &amp; Curriculum Analytics</div>
+          <h1 class="brand-title">Program Overlap &amp; Stackable Pathway Explorer</h1>
+        </div>
       </div>
 
-      <label for="csvFileInput" class="btn btn-secondary btn-sm" title="Load a custom or updated Program Summary.csv file">
-        <svg class="icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clip-rule="evenodd"/></svg>
-        <span>Load CSV</span>
-        <input type="file" id="csvFileInput" accept=".csv" hidden />
-      </label>
+      <div class="header-actions">
+        <div class="current-file-badge" id="dataStatusPill" title="Active Curriculum Programs Deduplicated by Program + Subject + Course Number">
+          <span class="status-dot loading" id="dataStatusDot"></span>
+          <span id="dataStatusText">Loading Program Summary.csv...</span>
+        </div>
 
-      <button type="button" id="exportCsvBtn" class="btn btn-secondary btn-sm" title="Download filtered Degree-Certificate overlap crosswalk as CSV">
-        <svg class="icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
-        <span>Export Crosswalk (CSV)</span>
-      </button>
+        <label for="csvFileInput" class="btn btn-secondary btn-sm" title="Load an updated Program Summary.csv file">
+          <svg class="icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clip-rule="evenodd"/></svg>
+          <span>Load CSV</span>
+          <input type="file" id="csvFileInput" accept=".csv" hidden />
+        </label>
 
-      <button type="button" id="exportPdfBtn" class="btn btn-primary btn-sm" title="Generate formatted Executive Summary PDF report of current Program Families">
-        <svg class="icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M6 2a2 2 0 00-2 2v12a2 2 0 002 2h8a2 2 0 002-2V7.414A2 2 0 0015.414 6L12 2.586A2 2 0 0010.586 2H6zm5 6a1 1 0 10-2 0v3.586l-1.293-1.293a1 1 0 10-1.414 1.414l3 3a1 1 0 001.414 0l3-3a1 1 0 00-1.414-1.414L11 11.586V8z" clip-rule="evenodd"/></svg>
-        <span>Export Family Report (PDF)</span>
-      </button>
+        <button type="button" id="exportCsvBtn" class="btn btn-secondary btn-sm" title="Download filtered Degree-Certificate overlap crosswalk as CSV">
+          <svg class="icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
+          <span>Export Crosswalk (CSV)</span>
+        </button>
 
-      <button type="button" id="themeToggleBtn" class="btn btn-icon" aria-label="Toggle Dark/Light Theme" title="Toggle Dark / Light Mode">
-        <svg class="icon icon-sun" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" clip-rule="evenodd"/></svg>
-        <svg class="icon icon-moon" viewBox="0 0 20 20" fill="currentColor"><path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z"/></svg>
-      </button>
+        <button type="button" id="exportPdfBtn" class="btn btn-primary btn-sm" title="Generate formatted Executive Summary PDF report of current Program Families">
+          <svg class="icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M6 2a2 2 0 00-2 2v12a2 2 0 002 2h8a2 2 0 002-2V7.414A2 2 0 0015.414 6L12 2.586A2 2 0 0010.586 2H6zm5 6a1 1 0 10-2 0v3.586l-1.293-1.293a1 1 0 10-1.414 1.414l3 3a1 1 0 001.414 0l3-3a1 1 0 00-1.414-1.414L11 11.586V8z" clip-rule="evenodd"/></svg>
+          <span>Export Family Report (PDF)</span>
+        </button>
+
+        <button type="button" id="themeToggleBtn" class="theme-toggle-btn" aria-label="Toggle Dark/Light Theme" title="Toggle Light / Dark Mode">
+          <svg class="icon theme-sun" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" clip-rule="evenodd"/></svg>
+          <svg class="icon theme-moon" viewBox="0 0 20 20" fill="currentColor"><path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z"/></svg>
+        </button>
+      </div>
     </div>
   </header>
 
-  <!-- Executive KPI Summary Bar -->
-  <section class="kpi-ribbon" aria-label="Curriculum Overlap Summary Metrics">
-    <div class="kpi-card">
-      <div class="kpi-label">Filtered Programs</div>
-      <div class="kpi-value" id="kpiTotalPrograms">&mdash;</div>
-      <div class="kpi-subtext" id="kpiProgramSplit">Degrees &amp; Certificates</div>
-    </div>
-    <div class="kpi-card kpi-highlight-crimson">
-      <div class="kpi-label">Program Families Formed</div>
-      <div class="kpi-value" id="kpiProgramFamilies">&mdash;</div>
-      <div class="kpi-subtext" id="kpiFamilySubtext">Degrees with stackable certs</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">Stackable Pathways</div>
-      <div class="kpi-value" id="kpiStackablePairs">&mdash;</div>
-      <div class="kpi-subtext" id="kpiPairsSubtext">Pairs meeting overlap threshold</div>
-    </div>
-    <div class="kpi-card kpi-highlight-gold">
-      <div class="kpi-label">100% Embedded Milestones</div>
-      <div class="kpi-value" id="kpiEmbeddedCerts">&mdash;</div>
-      <div class="kpi-subtext">Zero extra courses required</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">Unique Catalog Courses</div>
-      <div class="kpi-value" id="kpiUniqueCourses">&mdash;</div>
-      <div class="kpi-subtext" id="kpiRawRowsNote">Deduplicated from PLO grain</div>
-    </div>
-  </section>
+  <!-- Main Dashboard Container -->
+  <main class="dashboard-main">
+    <!-- Top View Mode Tabs Bar (Matches example 1 .plan-tabs-bar) -->
+    <nav class="plan-tabs-bar" aria-label="Visualization Modes">
+      <div class="plan-tabs-scroll" role="tablist">
+        <button type="button" class="plan-tab active" role="tab" aria-selected="true" data-view="families" id="tabFamilies">
+          <svg class="icon" viewBox="0 0 20 20" fill="currentColor"><path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4z"/></svg>
+          <span>Stackable Family Explorer</span>
+          <span class="plan-count-pill" id="tabBadgeFamilies">0</span>
+        </button>
 
-  <!-- Main Workspace Container: Sidebar + Content Views -->
-  <div class="workspace-layout">
-    <!-- Left Control & Filter Sidebar -->
-    <aside class="control-sidebar" id="controlSidebar" aria-label="Analysis Controls and Filters">
-      <div class="sidebar-section">
-        <div class="sidebar-header-row">
-          <h2 class="sidebar-heading">Filter &amp; Model Controls</h2>
-          <button type="button" id="resetFiltersBtn" class="btn-link" title="Reset all filters to institutional defaults">Reset</button>
-        </div>
+        <button type="button" class="plan-tab" role="tab" aria-selected="false" data-view="network" id="tabNetwork">
+          <svg class="icon" viewBox="0 0 20 20" fill="currentColor"><path d="M11 3a1 1 0 10-2 0v1a1 1 0 102 0V3zM15.657 5.757a1 1 0 00-1.414-1.414l-.707.707a1 1 0 001.414 1.414l.707-.707zM18 10a1 1 0 01-1 1h-1a1 1 0 110-2h1a1 1 0 011 1zM5.05 6.464A1 1 0 106.464 5.05l-.707-.707a1 1 0 00-1.414 1.414l.707.707zM5 10a1 1 0 01-1 1H3a1 1 0 110-2h1a1 1 0 011 1zM8 16v-1h4v1a2 2 0 11-4 0zM12 14c.015-.34.208-.646.477-.859a4 4 0 10-4.954 0c.27.213.462.519.476.859h4.002z"/></svg>
+          <span>Interactive Network Cluster</span>
+          <span class="plan-count-pill" id="tabBadgeNetwork">0</span>
+        </button>
 
-        <!-- Search Input -->
-        <div class="control-group">
-          <label for="searchInput" class="control-label">Search Programs or Courses</label>
-          <div class="search-input-wrapper">
-            <svg class="search-icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd"/></svg>
-            <input type="text" id="searchInput" class="form-input" placeholder="e.g. Drafting, DRAFT 20, Cyber..." autocomplete="off" />
-            <button type="button" id="clearSearchBtn" class="clear-input-btn hidden" aria-label="Clear search">&times;</button>
+        <button type="button" class="plan-tab" role="tab" aria-selected="false" data-view="matrix" id="tabMatrix">
+          <svg class="icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5 4a3 3 0 00-3 3v6a3 3 0 003 3h10a3 3 0 003-3V7a3 3 0 00-3-3H5zm-1 9v-1h5v2H5a1 1 0 01-1-1zm7 1h4a1 1 0 001-1v-1h-5v2zm0-4h5V8h-5v2zM9 8H4v2h5V8z" clip-rule="evenodd"/></svg>
+          <span>Overlap Crosswalk Matrix</span>
+        </button>
+      </div>
+    </nav>
+
+    <!-- Horizon Context Banner (Matches example 1 .plan-horizon-banner) -->
+    <section class="plan-horizon-banner" aria-label="Active Curriculum Scope">
+      <div class="horizon-text">
+        <h2>Active Curriculum Stackability &amp; Pathway Alignment</h2>
+        <p>Analyzes deduplicated course requirements across active Chaffey College Associate Degrees and Certificates to identify embedded milestones and course gap checklists.</p>
+      </div>
+      <div class="horizon-tags">
+        <span class="horizon-tag">
+          <span class="dot-indicator dot-green"></span>
+          <span>Status: Active Offerings Only</span>
+        </span>
+        <span class="horizon-tag">
+          <span>Formula: |S<sub>D</sub> &cap; S<sub>C</sub>| / |S<sub>C</sub>| &times; 100</span>
+        </span>
+        <span class="horizon-tag" id="activeFilterSummaryTag">
+          <span>Scope: All Disciplines</span>
+        </span>
+      </div>
+    </section>
+
+    <!-- High-Level KPI Summary Grid (Matches example 1 .kpi-summary-grid) -->
+    <section class="kpi-summary-grid" aria-label="Curriculum Overlap Summary Metrics">
+      <!-- Radial Progress Health Card -->
+      <div class="kpi-card kpi-health-card">
+        <div class="kpi-health-wrapper">
+          <div class="kpi-radial-progress">
+            <svg viewBox="0 0 36 36" class="circular-chart">
+              <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+              <path class="circle-progress" id="kpiRadialPath" stroke-dasharray="0, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+            </svg>
+            <div class="radial-percentage" id="kpiRadialPct">0%</div>
           </div>
-          <span class="control-hint">Matches Program Title, Subject/Course ID, or Course Title</span>
-        </div>
-
-        <!-- Overlap Threshold Slider -->
-        <div class="control-group">
-          <div class="control-label-row">
-            <label for="thresholdSlider" class="control-label">Min Overlap Threshold</label>
-            <span class="threshold-readout" id="thresholdValueDisplay">80%</span>
-          </div>
-          <input type="range" id="thresholdSlider" class="range-slider" min="50" max="100" value="80" step="1" />
-          <div class="preset-pills" role="group" aria-label="Threshold presets">
-            <button type="button" class="preset-pill" data-threshold="50">50%</button>
-            <button type="button" class="preset-pill" data-threshold="70">70%</button>
-            <button type="button" class="preset-pill active" data-threshold="80">80%</button>
-            <button type="button" class="preset-pill" data-threshold="90">90%</button>
-            <button type="button" class="preset-pill" data-threshold="100">100%</button>
+          <div class="kpi-body">
+            <span class="kpi-label">Degree Stackability Rate</span>
+            <div class="kpi-headline" id="kpiProgramFamilies">&mdash; Families</div>
+            <div class="kpi-subtext" id="kpiFamilySubtext">Degrees with &ge;1 stackable cert</div>
           </div>
         </div>
+      </div>
 
-        <!-- Stackability Direction Toggle -->
-        <div class="control-group">
-          <label class="control-label">Stackability Metric Mode</label>
-          <div class="segmented-toggle" role="radiogroup" aria-label="Stackability Metric Mode">
-            <button type="button" class="seg-btn active" data-metric="directional" id="metricDirectionalBtn" title="(Shared Courses / Certificate Courses) * 100">
-              Cert Embedded in Degree
+      <!-- Filtered Active Programs -->
+      <div class="kpi-card">
+        <div class="kpi-icon-badge bg-chaffey-subtle text-chaffey">
+          <svg class="icon-lg" viewBox="0 0 20 20" fill="currentColor"><path d="M10.394 2.08a1 1 0 00-.788 0l-7 3a1 1 0 000 1.84L5.25 8.051a.999.999 0 01.356-.257l4-1.714a1 1 0 11.788 1.838L7.667 9.088l1.94.831a1 1 0 00.787 0l7-3a1 1 0 000-1.838l-7-3zM3.31 9.397L5 10.12v4.102a8.969 8.969 0 00-1.05-.174 1 1 0 01-.89-.89 11.115 11.115 0 01.25-3.762zM9.3 16.573A9.026 9.026 0 007 14.935v-3.957l1.818.78a3 3 0 002.364 0l5.508-2.361a11.026 11.026 0 01.25 3.762 1 1 0 01-.89.89 8.968 8.968 0 00-5.35 2.524 1 1 0 01-1.4 0z"/></svg>
+        </div>
+        <div class="kpi-body">
+          <span class="kpi-label">Active Programs</span>
+          <div class="kpi-value" id="kpiTotalPrograms">&mdash;</div>
+          <div class="kpi-subtext" id="kpiProgramSplit">Degrees &amp; Certificates</div>
+        </div>
+      </div>
+
+      <!-- Stackable Pathways -->
+      <div class="kpi-card">
+        <div class="kpi-icon-badge bg-blue-subtle text-blue">
+          <svg class="icon-lg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M12.586 4.586a2 2 0 112.828 2.828l-3 3a2 2 0 01-2.828 0 1 1 0 00-1.414 1.414 4 4 0 005.656 0l3-3a4 4 0 00-5.656-5.656l-1.5 1.5a1 1 0 101.414 1.414l1.5-1.5zm-5 5a2 2 0 012.828 0 1 1 0 101.414-1.414 4 4 0 00-5.656 0l-3 3a4 4 0 105.656 5.656l1.5-1.5a1 1 0 10-1.414-1.414l-1.5 1.5a2 2 0 11-2.828-2.828l3-3z" clip-rule="evenodd"/></svg>
+        </div>
+        <div class="kpi-body">
+          <span class="kpi-label">Stackable Pathways</span>
+          <div class="kpi-value" id="kpiStackablePairs">&mdash;</div>
+          <div class="kpi-subtext" id="kpiPairsSubtext">Pairs meeting threshold</div>
+        </div>
+      </div>
+
+      <!-- 100% Embedded Milestones -->
+      <div class="kpi-card">
+        <div class="kpi-icon-badge bg-green-subtle text-green">
+          <svg class="icon-lg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+        </div>
+        <div class="kpi-body">
+          <span class="kpi-label">100% Embedded Milestones</span>
+          <div class="kpi-value" id="kpiEmbeddedCerts">&mdash;</div>
+          <div class="kpi-subtext">Zero extra courses needed</div>
+        </div>
+      </div>
+
+      <!-- Unique Catalog Courses -->
+      <div class="kpi-card">
+        <div class="kpi-icon-badge bg-purple-subtle text-purple">
+          <svg class="icon-lg" viewBox="0 0 20 20" fill="currentColor"><path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z"/></svg>
+        </div>
+        <div class="kpi-body">
+          <span class="kpi-label">Unique Courses</span>
+          <div class="kpi-value" id="kpiUniqueCourses">&mdash;</div>
+          <div class="kpi-subtext" id="kpiRawRowsNote">Deduplicated from PLO rows</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Main Body Layout: Collapsible Left Sidebar + Content Area (Matches example 1) -->
+    <div class="dashboard-body-layout">
+      <!-- Left Filter Sidebar -->
+      <aside class="dashboard-sidebar" id="controlSidebar" aria-label="Curriculum Filters">
+        <div class="sidebar-header">
+          <div class="sidebar-title">
+            <svg class="icon text-chaffey" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 3a1 1 0 011-1h12a1 1 0 011 1v3a1 1 0 01-.293.707L12 11.414V15a1 1 0 01-.293.707l-2 2A1 1 0 018 17v-5.586L3.293 6.707A1 1 0 013 6V3z" clip-rule="evenodd"/></svg>
+            <span>Filters &amp; Controls</span>
+          </div>
+          <button type="button" id="collapseSidebarBtn" class="btn-sidebar-collapse" title="Collapse Filter Sidebar" aria-label="Collapse Filter Sidebar">&#10094;</button>
+        </div>
+
+        <div class="sidebar-filter-actions">
+          <span class="filter-active-count" id="activeFiltersBadge">Active Programs</span>
+          <button type="button" id="resetFiltersBtn" class="btn-text">Reset All</button>
+        </div>
+
+        <div class="sidebar-filters-body">
+          <!-- Keyword Search -->
+          <div class="sidebar-filter-item">
+            <label for="searchInput" class="filter-label">Search Courses or Keywords</label>
+            <div class="search-input-wrap">
+              <svg class="search-icon icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd"/></svg>
+              <input type="text" id="searchInput" placeholder="e.g. DRAFT 20, ACCTG 1A..." autocomplete="off" />
+              <button type="button" id="clearSearchBtn" class="search-clear-btn hidden" aria-label="Clear search">&times;</button>
+            </div>
+          </div>
+
+          <!-- Overlap Threshold Slider -->
+          <div class="sidebar-filter-item">
+            <div class="form-label">
+              <label for="thresholdSlider" class="filter-label">Min Overlap Threshold</label>
+              <span class="threshold-readout" id="thresholdValueDisplay">80%</span>
+            </div>
+            <input type="range" id="thresholdSlider" class="range-slider" min="50" max="100" value="80" step="1" />
+            <div class="quick-chips-grid" role="group" aria-label="Threshold presets">
+              <button type="button" class="chip-btn preset-pill" data-threshold="50">50%</button>
+              <button type="button" class="chip-btn preset-pill" data-threshold="70">70%</button>
+              <button type="button" class="chip-btn preset-pill active" data-threshold="80">80%</button>
+              <button type="button" class="chip-btn preset-pill" data-threshold="90">90%</button>
+              <button type="button" class="chip-btn preset-pill" data-threshold="100">100%</button>
+            </div>
+          </div>
+
+          <!-- Discipline / Department Accordion Filter (Matches example 2 .accordion-item) -->
+          <div class="accordion-item open" id="disciplineAccordion">
+            <button type="button" class="accordion-header" id="disciplineAccordionBtn">
+              <span>Discipline / Department</span>
+              <span class="badge" id="disciplineBadge">All</span>
+              <svg class="icon chevron" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
             </button>
-            <button type="button" class="seg-btn" data-metric="jaccard" id="metricJaccardBtn" title="(Shared Courses / Union of Both Programs) * 100">
-              Jaccard Similarity
-            </button>
-          </div>
-          <div class="formula-callout" id="formulaCallout">
-            <code>Overlap % = |S<sub>D</sub> &cap; S<sub>C</sub>| / |S<sub>C</sub>| &times; 100</code>
-            <span>Measures how much of Certificate C is embedded inside Degree D.</span>
-          </div>
-        </div>
-
-        <!-- Lifecycle Status Multi-Select -->
-        <div class="control-group">
-          <div class="control-label-row">
-            <label class="control-label">Program Lifecycle Status</label>
-            <button type="button" id="statusActiveOnlyBtn" class="btn-link-xs">Active Only</button>
-          </div>
-          <div class="status-checkbox-grid" id="statusFilterContainer">
-            <label class="status-check-item active-checked">
-              <input type="checkbox" name="programStatus" value="Active" checked />
-              <span class="status-badge status-active">Active</span>
-              <span class="status-count" id="countStatusActive">0</span>
-            </label>
-            <label class="status-check-item">
-              <input type="checkbox" name="programStatus" value="In Review" />
-              <span class="status-badge status-review">In Review</span>
-              <span class="status-count" id="countStatusReview">0</span>
-            </label>
-            <label class="status-check-item">
-              <input type="checkbox" name="programStatus" value="Draft" />
-              <span class="status-badge status-draft">Draft</span>
-              <span class="status-count" id="countStatusDraft">0</span>
-            </label>
-            <label class="status-check-item">
-              <input type="checkbox" name="programStatus" value="Deactivated" />
-              <span class="status-badge status-deactivated">Deactivated</span>
-              <span class="status-count" id="countStatusDeactivated">0</span>
-            </label>
-          </div>
-        </div>
-
-        <!-- Discipline / Department Multi-Select Dropdown -->
-        <div class="control-group">
-          <div class="control-label-row">
-            <label class="control-label">Discipline / Department</label>
-            <span class="selection-counter" id="disciplineSelectionCount">All Selected</span>
-          </div>
-          <div class="multi-dropdown" id="disciplineDropdown">
-            <button type="button" class="multi-dropdown-trigger" id="disciplineDropdownBtn" aria-expanded="false">
-              <span id="disciplineTriggerLabel">All Disciplines</span>
-              <svg class="chevron-icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
-            </button>
-            <div class="multi-dropdown-menu hidden" id="disciplineDropdownMenu">
-              <div class="dropdown-menu-header">
-                <input type="text" id="disciplineSearchInput" class="form-input form-input-sm" placeholder="Filter disciplines..." />
-                <div class="dropdown-quick-actions">
-                  <button type="button" id="selectAllDisciplinesBtn" class="btn-link-xs">Select All</button>
-                  <button type="button" id="clearAllDisciplinesBtn" class="btn-link-xs">Clear All</button>
+            <div class="accordion-body">
+              <div class="checkbox-search-wrapper">
+                <input type="text" id="disciplineSearchInput" class="form-input-sm" placeholder="Search disciplines (e.g. Accounting)..." />
+                <div class="accordion-quick-bar">
+                  <span class="accordion-hint">Click to filter by primary department</span>
+                  <button type="button" id="clearDisciplinesBtn" class="btn-text">Show All</button>
                 </div>
               </div>
-              <div class="dropdown-options-list" id="disciplineOptionsList">
-                <!-- Populated dynamically from CSV Discipline column -->
+              <div class="checkbox-list" id="disciplineOptionsList">
+                <!-- Populated dynamically with primary disciplines -->
               </div>
             </div>
           </div>
-        </div>
 
-        <!-- Family Sorting & Display Options -->
-        <div class="control-group">
-          <label for="sortBySelect" class="control-label">Sort Program Families By</label>
-          <select id="sortBySelect" class="form-select">
-            <option value="certCount">Most Stackable Certificates</option>
-            <option value="maxOverlap">Highest Overlap Percentage</option>
-            <option value="alpha">Degree Title (A &rarr; Z)</option>
-            <option value="units">Total Degree Units (High &rarr; Low)</option>
-          </select>
-        </div>
-
-        <div class="control-group toggle-options-group">
-          <label class="switch-row">
-            <input type="checkbox" id="onlyWithCertsToggle" checked />
-            <span>Only show Degrees with &ge;1 qualifying Certificate</span>
-          </label>
-          <label class="switch-row">
-            <input type="checkbox" id="excludeGeToggle" />
-            <span>Exclude GE Breadth Lists (CSU GE, Cal-GETC, Local GE)</span>
-          </label>
-        </div>
-      </div>
-    </aside>
-
-    <!-- Primary Main View Panel -->
-    <main class="main-panel">
-      <!-- View Mode Switcher Tabs -->
-      <div class="view-tabs-bar">
-        <div class="view-tabs" role="tablist" aria-label="Visualization Modes">
-          <button type="button" class="view-tab active" role="tab" aria-selected="true" data-view="families" id="tabFamilies">
-            <svg class="icon" viewBox="0 0 20 20" fill="currentColor"><path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4z"/></svg>
-            <span>Stackable Family Explorer</span>
-            <span class="tab-badge" id="tabBadgeFamilies">0</span>
-          </button>
-
-          <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="network" id="tabNetwork">
-            <svg class="icon" viewBox="0 0 20 20" fill="currentColor"><path d="M11 3a1 1 0 10-2 0v1a1 1 0 102 0V3zM15.657 5.757a1 1 0 00-1.414-1.414l-.707.707a1 1 0 001.414 1.414l.707-.707zM18 10a1 1 0 01-1 1h-1a1 1 0 110-2h1a1 1 0 011 1zM5.05 6.464A1 1 0 106.464 5.05l-.707-.707a1 1 0 00-1.414 1.414l.707.707zM5 10a1 1 0 01-1 1H3a1 1 0 110-2h1a1 1 0 011 1zM8 16v-1h4v1a2 2 0 11-4 0zM12 14c.015-.34.208-.646.477-.859a4 4 0 10-4.954 0c.27.213.462.519.476.859h4.002z"/></svg>
-            <span>Interactive Network Cluster</span>
-            <span class="tab-badge" id="tabBadgeNetwork">0</span>
-          </button>
-
-          <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="matrix" id="tabMatrix">
-            <svg class="icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5 4a3 3 0 00-3 3v6a3 3 0 003 3h10a3 3 0 003-3V7a3 3 0 00-3-3H5zm-1 9v-1h5v2H5a1 1 0 01-1-1zm7 1h4a1 1 0 001-1v-1h-5v2zm0-4h5V8h-5v2zM9 8H4v2h5V8z" clip-rule="evenodd"/></svg>
-            <span>Overlap Crosswalk Matrix</span>
-          </button>
-        </div>
-
-        <div class="view-Context-actions" id="familyBulkActions">
-          <button type="button" id="expandAllFamiliesBtn" class="btn btn-ghost btn-xs">Expand All Cards</button>
-          <button type="button" id="collapseAllFamiliesBtn" class="btn btn-ghost btn-xs">Collapse All</button>
-        </div>
-      </div>
-
-      <!-- VIEW 1: Stackable Family Explorer (Primary View) -->
-      <section id="viewFamilies" class="view-pane active" role="tabpanel" aria-labelledby="tabFamilies">
-        <div class="view-intro-banner">
-          <div class="intro-banner-text">
-            <strong>Program Family Stackability Analysis:</strong> Each family card is anchored by an <strong>Associate Degree</strong> and lists all <strong>Certificates</strong> meeting your overlap threshold. Click any certificate badge to open its interactive <strong>Course Gap Checklist</strong> (<span class="dot-green"></span> Embedded Courses vs. <span class="dot-orange"></span> Remaining Courses Needed).
-          </div>
-        </div>
-
-        <div id="familyCardsContainer" class="family-cards-deck">
-          <!-- Populated dynamically by app.js -->
-        </div>
-      </section>
-
-      <!-- VIEW 2: Interactive Network Cluster Graph (Vis.js) -->
-      <section id="viewNetwork" class="view-pane hidden" role="tabpanel" aria-labelledby="tabNetwork">
-        <div class="network-toolbar">
-          <div class="network-legend">
-            <span class="legend-item"><span class="legend-node degree-node"></span> Associate Degree (Size = Total Units)</span>
-            <span class="legend-item"><span class="legend-node cert-embedded-node"></span> 100% Embedded Milestone Cert</span>
-            <span class="legend-item"><span class="legend-node cert-node"></span> Stackable Certificate (&ge; Threshold)</span>
-            <span class="legend-item"><span class="legend-edge"></span> Edge Thickness = Overlap %</span>
-          </div>
-          <div class="network-controls">
-            <label class="switch-row switch-inline">
-              <input type="checkbox" id="networkHideIsolatedToggle" checked />
-              <span>Hide Isolated Nodes</span>
-            </label>
-            <button type="button" id="networkPhysicsBtn" class="btn btn-secondary btn-xs">Pause Layout</button>
-            <button type="button" id="networkFitBtn" class="btn btn-secondary btn-xs">Fit Graph</button>
-          </div>
-        </div>
-
-        <div class="network-split-layout">
-          <div id="networkCanvas" class="network-canvas-container" aria-label="Interactive Program Overlap Network Graph"></div>
-          <aside class="network-inspector" id="networkInspector">
-            <div class="inspector-empty-state" id="inspectorEmptyState">
-              <div class="inspector-icon">&#128269;</div>
-              <h3>Cluster Node Inspector</h3>
-              <p>Click any <strong>Degree</strong> (Crimson) or <strong>Certificate</strong> (Gold/Slate) node in the network graph to highlight its connected cluster and inspect shared course requirements.</p>
+          <!-- Program Titles Accordion Filter (Degrees & Certificates) -->
+          <div class="accordion-item open" id="programTitleAccordion">
+            <button type="button" class="accordion-header" id="programTitleAccordionBtn">
+              <span>Program Titles</span>
+              <span class="badge" id="programTitleBadge">All</span>
+              <svg class="icon chevron" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
+            </button>
+            <div class="accordion-body">
+              <div class="checkbox-search-wrapper">
+                <div class="tier-mini-tabs" role="group" aria-label="Filter Program List by Tier">
+                  <button type="button" class="tier-mini-btn active" data-tier="all">All</button>
+                  <button type="button" class="tier-mini-btn" data-tier="Degree">Degrees</button>
+                  <button type="button" class="tier-mini-btn" data-tier="Certificate">Certificates</button>
+                </div>
+                <input type="text" id="programTitleSearchInput" class="form-input-sm" placeholder="Filter program titles..." />
+                <div class="accordion-quick-bar">
+                  <span class="accordion-hint" id="programListCountHint">Showing all active programs</span>
+                  <button type="button" id="clearProgramTitlesBtn" class="btn-text">Show All</button>
+                </div>
+              </div>
+              <div class="checkbox-list" id="programTitleOptionsList">
+                <!-- Populated dynamically with active Program Entity Titles -->
+              </div>
             </div>
-            <div id="inspectorContent" class="inspector-content hidden"></div>
-          </aside>
-        </div>
-      </section>
+          </div>
 
-      <!-- VIEW 3: Overlap Crosswalk Matrix -->
-      <section id="viewMatrix" class="view-pane hidden" role="tabpanel" aria-labelledby="tabMatrix">
-        <div class="matrix-toolbar">
-          <div class="matrix-controls-left">
-            <label for="matrixScopeSelect" class="control-label-inline">Matrix Scope:</label>
-            <select id="matrixScopeSelect" class="form-select form-select-sm">
-              <option value="matching">Only Degrees &amp; Certs with &ge;1 Match at Threshold</option>
-              <option value="top35">Top 35 Most Connected Degrees &times; Certificates</option>
-              <option value="all">All Filtered Degrees &times; Certificates</option>
+          <!-- Sort Order -->
+          <div class="sidebar-filter-item">
+            <label for="sortBySelect" class="filter-label">Sort Program Families By</label>
+            <select id="sortBySelect" class="filter-select">
+              <option value="certCount">Most Stackable Certificates</option>
+              <option value="maxOverlap">Highest Overlap Percentage</option>
+              <option value="alpha">Degree Title (A &rarr; Z)</option>
+              <option value="units">Total Degree Units (High &rarr; Low)</option>
             </select>
-            <span class="matrix-dimensions-badge" id="matrixDimensionsBadge">0 &times; 0</span>
           </div>
-          <div class="matrix-legend">
-            <span>Overlap Scale:</span>
-            <span class="heat-chip heat-low">&lt;50%</span>
-            <span class="heat-chip heat-mid">50&ndash;79%</span>
-            <span class="heat-chip heat-high">80&ndash;99%</span>
-            <span class="heat-chip heat-full">100% Milestone</span>
+
+          <!-- Display Toggles -->
+          <div class="sidebar-quick-chips">
+            <label class="checkbox-label">
+              <input type="checkbox" id="onlyWithCertsToggle" checked />
+              <span>Only Degrees with &ge;1 stackable cert</span>
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="excludeGeToggle" checked />
+              <span>Exclude GE Breadth Lists (Cal-GETC / Local GE)</span>
+            </label>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Right Main Content Area -->
+      <div class="dashboard-content-area">
+        <!-- Results Toolbar Header -->
+        <div class="metrics-grid-header">
+          <div class="metrics-results-info">
+            <button type="button" id="expandSidebarBtn" class="btn btn-secondary btn-sm sidebar-expand-btn hidden">
+              <span>&#9776; Filters</span>
+            </button>
+            <span id="resultsToolbarSummary">Showing active Program Families</span>
+          </div>
+
+          <div class="view-context-actions" id="familyBulkActions">
+            <button type="button" id="expandAllFamiliesBtn" class="btn btn-secondary btn-sm">Expand All Cards</button>
+            <button type="button" id="collapseAllFamiliesBtn" class="btn btn-outline btn-sm">Collapse All</button>
           </div>
         </div>
 
-        <div class="matrix-scroll-container" id="matrixScrollContainer">
-          <!-- Populated dynamically with interactive heatmap table -->
-        </div>
-      </section>
-    </main>
-  </div>
+        <!-- VIEW 1: Stackable Family Explorer (Primary View) -->
+        <section id="viewFamilies" class="view-pane active" role="tabpanel" aria-labelledby="tabFamilies">
+          <div id="familyCardsContainer" class="family-cards-deck">
+            <!-- Populated dynamically by app.js -->
+          </div>
+        </section>
+
+        <!-- VIEW 2: Interactive Network Cluster Graph (Vis.js) -->
+        <section id="viewNetwork" class="view-pane hidden" role="tabpanel" aria-labelledby="tabNetwork">
+          <div class="network-toolbar">
+            <div class="network-legend">
+              <span class="legend-item"><span class="legend-node degree-node"></span> Associate Degree (Size = Total Units)</span>
+              <span class="legend-item"><span class="legend-node cert-embedded-node"></span> 100% Embedded Milestone Cert</span>
+              <span class="legend-item"><span class="legend-node cert-node"></span> Stackable Certificate (&ge; Threshold)</span>
+              <span class="legend-item"><span class="legend-edge"></span> Edge Width = Stackable Overlap %</span>
+            </div>
+            <div class="network-controls">
+              <label class="checkbox-label">
+                <input type="checkbox" id="networkHideIsolatedToggle" checked />
+                <span>Hide Isolated Nodes</span>
+              </label>
+              <button type="button" id="networkPhysicsBtn" class="btn btn-secondary btn-sm">Pause Layout</button>
+              <button type="button" id="networkFitBtn" class="btn btn-secondary btn-sm">Fit Graph</button>
+            </div>
+          </div>
+
+          <div class="network-split-layout">
+            <div id="networkCanvas" class="network-canvas-container" aria-label="Interactive Program Overlap Network Graph"></div>
+            <aside class="network-inspector" id="networkInspector">
+              <div class="inspector-empty-state" id="inspectorEmptyState">
+                <div class="inspector-icon">&#128269;</div>
+                <h3>Cluster Node Inspector</h3>
+                <p>Click any <strong>Degree</strong> (Crimson) or <strong>Certificate</strong> (Gold/Slate) node in the network graph to highlight its connected cluster and inspect shared course requirements.</p>
+              </div>
+              <div id="inspectorContent" class="inspector-content hidden"></div>
+            </aside>
+          </div>
+        </section>
+
+        <!-- VIEW 3: Overlap Crosswalk Matrix -->
+        <section id="viewMatrix" class="view-pane hidden" role="tabpanel" aria-labelledby="tabMatrix">
+          <div class="matrix-toolbar">
+            <div class="matrix-controls-left">
+              <label for="matrixScopeSelect" class="filter-label">Matrix Scope:</label>
+              <select id="matrixScopeSelect" class="filter-select form-select-auto">
+                <option value="matching">Only Degrees &amp; Certs with &ge;1 Match at Threshold</option>
+                <option value="top35">Top 35 Most Connected Degrees &times; Certificates</option>
+                <option value="all">All Filtered Degrees &times; Certificates</option>
+              </select>
+              <span class="plan-count-pill" id="matrixDimensionsBadge">0 &times; 0</span>
+            </div>
+            <div class="matrix-legend">
+              <span>Stackable Overlap Scale:</span>
+              <span class="heat-chip heat-low">&lt;50%</span>
+              <span class="heat-chip heat-mid">50&ndash;79%</span>
+              <span class="heat-chip heat-high">80&ndash;99%</span>
+              <span class="heat-chip heat-full">100% Milestone</span>
+            </div>
+          </div>
+
+          <div class="matrix-scroll-container" id="matrixScrollContainer">
+            <!-- Populated dynamically with interactive heatmap table -->
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
 
   <!-- Course Gap Checklist & Program Comparison Modal -->
   <div class="modal-backdrop hidden" id="comparisonModalBackdrop" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
