@@ -1771,6 +1771,76 @@ h1, h2, h3, h4, h5, h6 {
   overflow-y: auto;
 }
 
+/* Catalog Description Container & Rich Formatting */
+.catalog-desc-container {
+  background: var(--bg-subtle);
+  padding: 0.95rem 1.15rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-light);
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+}
+
+.catalog-desc-title {
+  color: var(--text-primary);
+  display: block;
+  margin-bottom: 0.45rem;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.catalog-desc-body {
+  line-height: 1.62;
+  font-size: 0.835rem;
+}
+
+.catalog-desc-body p {
+  margin: 0 0 0.65rem 0;
+}
+
+.catalog-desc-body p:last-child {
+  margin-bottom: 0;
+}
+
+.catalog-desc-body ul,
+.catalog-desc-body ol {
+  margin: 0.35rem 0 0.65rem 1.25rem;
+  padding-left: 0.5rem;
+}
+
+.catalog-desc-body ul {
+  list-style-type: disc;
+}
+
+.catalog-desc-body ol {
+  list-style-type: decimal;
+}
+
+.catalog-desc-body li {
+  margin-bottom: 0.3rem;
+  line-height: 1.55;
+}
+
+.catalog-desc-body li:last-child {
+  margin-bottom: 0;
+}
+
+.catalog-desc-body a {
+  color: var(--chaffey-red);
+  text-decoration: underline;
+  word-break: break-all;
+}
+
+.catalog-desc-body a:hover {
+  color: var(--chaffey-red-dark);
+}
+
+.catalog-desc-body strong,
+.catalog-desc-body b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
 .empty-state-box {
   text-align: center;
   padding: 3.5rem 2rem;
